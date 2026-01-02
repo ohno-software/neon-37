@@ -1,0 +1,52 @@
+name: Build and Publish
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Prepare Artifacts
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path artifacts
+        
+        # Copy VST3
+        $vstPath = "build/Neon37_artefacts/Release/VST3/Neon37.vst3"
+        if (Test-Path $vstPath) {
+            Copy-Item -Path $vstPath -Destination "artifacts/" -Recurse
+        } else {
+            Write-Host "Warning: VST3 not found at $vstPath"
+        }
+        
+        # Copy Standalone EXE
+        $exePath = "build/Neon37_artefacts/Release/Standalone/Neon37.exe"
+        if (Test-Path $exePath) {
+            Copy-Item -Path $exePath -Destination "artifacts/"
+        } else {
+            Write-Host "Warning: Standalone EXE not found at $exePath"
+        }
+
+    - name: Zip Artifacts
+      shell: pwsh
+      run: |
+        Compress-Archive -Path artifacts/* -DestinationPath Neon37_Windows.zip
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: Neon37_Windows
+        path: Neon37_Windows.zip
