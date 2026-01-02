@@ -1,0 +1,31 @@
+# Build folders
+build/
+build_final/
+build_neon/
+build_new/
+*_artefacts/
+x64/
+Release/
+Debug/
+
+# IDE files
+.vs/
+*.sln
+*.vcxproj
+*.filters
+*.user
+*.suo
+*.db
+*.opendb
+
+# JUCE/CMake temporary files
+JuceLibraryCode/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# OS files
+.DS_Store
+Thumbs.db

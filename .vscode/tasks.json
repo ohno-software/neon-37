@@ -1,0 +1,70 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build neon-37",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release"
+		},
+		{
+			"label": "build-neon-standalone",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-standalone-mw-toggles",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-aggressive-drive",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-mono-mode",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-mono-mode-fix",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-clean-warnings",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		},
+		{
+			"label": "build-neon-mono-fix-v2",
+			"type": "shell",
+			"command": "cmake --build build_neon --config Release --target Neon37_Standalone"
+		}
+	]
+}

@@ -1,0 +1,50 @@
+cmake_minimum_required(VERSION 3.15)
+
+project(Neon37 VERSION 0.0.1)
+
+# Fetch JUCE
+include(FetchContent)
+FetchContent_Declare(
+    juce
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG        7.0.5 # Or latest stable
+)
+FetchContent_MakeAvailable(juce)
+
+juce_add_plugin(Neon37
+    COMPANY_NAME "Neon Audio"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    COPY_AFTER_BUILD TRUE
+    PLUGIN_MANUFACTURER_CODE Neon
+    PLUGIN_CODE N37p
+    FORMATS AU VST3 Standalone
+)
+
+target_sources(Neon37
+    PRIVATE
+        Source/PluginProcessor.cpp
+        Source/PluginProcessor.h
+        Source/PluginEditor.cpp
+        Source/PluginEditor.h
+)
+
+target_compile_definitions(Neon37
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_link_libraries(Neon37
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
