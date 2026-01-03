@@ -2,159 +2,45 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include <map>
+#include <algorithm>
+#include <array>
 
-class Neon37Sound : public juce::SynthesiserSound
+// LFO structure for global LFO modulation
+struct Neon37LFO
 {
-public:
-    bool appliesToNote (int) override { return true; }
-    bool appliesToChannel (int) override { return true; }
+    float phase = 0.0f;           // 0-1 normalized phase
+    float rate = 0.1f;            // Hz (free mode) or tempo multiplier (sync mode)
+    int waveform = 0;             // 0=Triangle, 1=RampUp, 2=RampDown, 3=Square, 4=SampleHold
+    bool syncEnabled = false;
+    float pitchAmount = 0.0f;     // 0-12 semitones
+    float filterAmount = 0.0f;    // 0-1 (0-100%)
+    float ampAmount = 0.0f;       // 0-1 (0-100%)
 };
 
-struct ParaphonicState {
-    juce::ADSR env1, env2;
-    juce::AudioBuffer<float> env1Buffer, env2Buffer;
-    bool isCalculated = false;
-    int activeNotes = 0;
-    bool justNoteOn = false;
-    
-    void prepare(double sr, int maxBlockSize) {
-        env1.setSampleRate(sr);
-        env2.setSampleRate(sr);
-        env1Buffer.setSize(1, maxBlockSize);
-        env2Buffer.setSize(1, maxBlockSize);
-    }
-    
-    void calculate(int numSamples, bool expEnv) {
-        float* e1 = env1Buffer.getWritePointer(0);
-        float* e2 = env2Buffer.getWritePointer(0);
-        for (int i = 0; i < numSamples; ++i) {
-            e1[i] = env1.getNextSample();
-            e2[i] = env2.getNextSample();
-            if (expEnv) {
-                e1[i] *= e1[i];
-                e2[i] *= e2[i];
-            }
-        }
-
-        // JUCE ADSR can still output a tiny ramp on the first sample even with A=0.
-        // For Moog-style snappy response, snap the first sample to 1.0 on note-on when A is ~0.
-        if (justNoteOn && numSamples > 0)
-        {
-            const auto p1 = env1.getParameters();
-            const auto p2 = env2.getParameters();
-            if (p1.attack <= 1.0e-6f) e1[0] = 1.0f;
-            if (p2.attack <= 1.0e-6f) e2[0] = 1.0f;
-            if (expEnv) {
-                e1[0] *= e1[0];
-                e2[0] *= e2[0];
-            }
-            justNoteOn = false;
-        }
-    }
-};
-
-class Neon37Voice : public juce::SynthesiserVoice
+// Voice structure for paraphonic and poly operation
+// Paraphonic: Uses shared monoFilter/monoFilterEnv/monoAmpEnv, per-voice oscillators + ampGate
+// Poly: Each voice has independent filter, filterEnv, ampEnv - complete signal chain per voice
+struct Neon37Voice
 {
-public:
-    Neon37Voice();
-    bool canPlaySound (juce::SynthesiserSound* sound) override;
-    void startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound* sound, int currentPitchWheelPosition) override;
-    void retuneToMidiNote (int midiNoteNumber);
-    void stopNote (float velocity, bool allowTailOff) override;
-    void pitchWheelMoved (int newPitchWheelValue) override;
-    void controllerMoved (int controllerNumber, int newControllerValue) override;
-    void prepareToPlay (double sampleRate, int samplesPerBlock, int outputChannels);
-    void renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override;
+    int midiNote = -1;
+    bool active = false;
+    uint64_t allocationTimestamp = 0;  // Track when this voice was allocated (for stealing oldest voice)
     
-    void retriggerEnvelopes();
-    void startEnvelopesWithoutRetrigger();
-
-    void updateParameters (float osc1Wave, float osc1Octave, float osc1Semitones, float osc1Fine,
-                          float osc2Wave, float osc2Octave, float osc2Semitones, float osc2Fine,
-                          float env1A, float env1D, float env1S, float env1R,
-                          float env2A, float env2D, float env2S, float env2R,
-                          float mixerOsc1, float mixerOsc2, float mixerSub1, float mixerNoise,
-                          float filterCutoff, float filterResonance, float filterDrive, float filterEgDepth,
-                          bool expEnv,
-                          float lfo1Rate, bool lfo1Sync, int lfo1Wave, float lfo1Pitch, float lfo1Filter, float lfo1Amp,
-                          float lfo2Rate, bool lfo2Sync, int lfo2Wave, float lfo2Pitch, float lfo2Filter, float lfo2Amp,
-                          float velPitch, float velFilter, float velAmp,
-                          float atPitch, float atFilter, float atAmp,
-                          float pbPitch, float pbFilter, float pbAmp,
-                          bool lfo1Mw, bool lfo2Mw, bool velMw, bool atMw, bool pbMw,
-                          int voiceMode, int numActiveVoices);
+    // Oscillator phase tracking (independent per voice - free-running)
+    float osc1Phase = 0.0f, osc2Phase = 0.0f, subOscPhase = 0.0f;
     
-    float getFilterEnvValue() const { return lastEnv1Value; }
-
-    void setAftertouch(float value) { currentAftertouch = value; }
-    void setModWheel(float value) { currentModWheel = value; }
+    // For paraphonic modes: Amp gate for this voice (gates the oscillators on/off)
+    // Independent of the shared monoAmpEnv envelope
+    juce::ADSR ampGate;
     
-    void setParaState(std::shared_ptr<ParaphonicState> state) { paraState = state; }
-
-private:
-    juce::dsp::Oscillator<float> osc1, osc2, sub1;
-    juce::dsp::Oscillator<float> noise;
-    juce::dsp::Oscillator<float> lfo1, lfo2;
-    juce::dsp::Gain<float> osc1Gain, osc2Gain, sub1Gain, noiseGain;
-    juce::dsp::LadderFilter<float> voiceFilter; // Per-voice filter
+    // For poly mode: Per-voice filter and envelopes (complete signal chain)
+    juce::dsp::LadderFilter<float> filter;
+    juce::ADSR filterEnv;
+    juce::ADSR ampEnv;
     
-    std::shared_ptr<ParaphonicState> paraState;
-    
-    int currentOsc1Wave = 2;
-    int currentOsc2Wave = 2;
-    int currentLfo1Wave = 0;
-    int currentLfo2Wave = 0;
-    float currentPw = 0.5f;
-    float currentOsc1Octave = 1.0f, currentOsc1Semitones = 0.0f, currentOsc1Fine = 0.0f;
-    float currentOsc2Octave = 1.0f, currentOsc2Semitones = 0.0f, currentOsc2Fine = 0.0f;
-    float currentFilterCutoff = 20000.0f;
-    float currentFilterResonance = 0.0f;
-    float currentFilterDrive = 1.0f;
-    float currentFilterEgDepth = 0.0f;
-    bool useExpEnv = true;
-
-    // Mod parameters
-    float modLfo1Pitch = 0, modLfo1Filter = 0, modLfo1Amp = 0;
-    float modLfo2Pitch = 0, modLfo2Filter = 0, modLfo2Amp = 0;
-    float modVelPitch = 0, modVelFilter = 0, modVelAmp = 0;
-    float modAtPitch = 0, modAtFilter = 0, modAtAmp = 0;
-    float modPbPitch = 2, modPbFilter = 0, modPbAmp = 0;
-    bool modLfo1Mw = false, modLfo2Mw = false, modVelMw = false, modAtMw = false, modPbMw = false;
-    int currentVoiceMode = 0;
-    int activeVoiceCount = 0;
-
-    float currentVelocity = 0.0f;
-    float currentAftertouch = 0.0f;
-    float currentPitchBend = 0.0f; // -1.0 to 1.0
-    float currentModWheel = 0.0f; // 0.0 to 1.0
-
-    float baseOsc1Freq = 440.0f;
-    float baseOsc2Freq = 440.0f;
-    float baseSub1Freq = 220.0f;
-
-    // When Mono-L retunes without a new note-on, JUCE's getCurrentlyPlayingNote()
-    // does not change; this stores the effective note used for pitch calculation.
-    int pitchOverrideMidiNote = -1;
-
-    juce::ADSR env1, env2; // env1 for filter/mod, env2 for amp
-    juce::ADSR::Parameters env1Params, env2Params;
-    float lastEnv1Value = 0.0f;
-    
-    // LFO S&H state
-    float lfo1LastPhase = 0.0f;
-    float lfo1LastSH = 0.0f;
-    float lfo2LastPhase = 0.0f;
-    float lfo2LastSH = 0.0f;
-    
-    // 3ms fade-in/out to prevent clicks at note-on/off
-    int fadeInSamples = 0;
-    int fadeInCounter = 0;
-    int fadeOutSamples = 0;
-    int fadeOutCounter = -1; // -1 means not fading out
-    double currentSampleRate = 44100.0;
-
-    juce::AudioBuffer<float> synthBuffer;
-    bool isPrepared = false;
+    // Buffer for rendering this voice's signal (before shared processing in para modes)
+    juce::AudioBuffer<float> voiceBuffer;
 };
 
 class Neon37AudioProcessor : public juce::AudioProcessor
@@ -194,19 +80,58 @@ public:
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    juce::Synthesiser synth;
-    std::shared_ptr<ParaphonicState> paraState;
-
-    juce::dsp::Gain<float> masterGain;
-
-    // Mono mode state
-    std::vector<int> heldNotes;
-    int currentPlayingNote = -1;
+    // DSP Components - for MONO modes
+    juce::dsp::LadderFilter<float> monoFilter;
+    juce::dsp::Gain<float> outputGain;
+    juce::ADSR monoFilterEnv;
+    juce::ADSR monoAmpEnv;
     
-    // Hold mode state
-    std::vector<int> physicallyHeldNotes;
-    bool lastHoldState = false;
-    int lastVoiceMode = 0;
+    double currentSampleRate = 44100.0;
+    
+    // Oscillator phase tracking - for MONO modes
+    float osc1Phase = 0.0f, osc2Phase = 0.0f, subOscPhase = 0.0f;
+    
+    // MIDI note tracking - for MONO modes
+    int currentMidiNote = 60; // Middle C
+    int heldNoteCount = 0;    // Track how many keys are currently held
+    std::vector<int> noteStack;  // Stack of held notes (for proper mono note recall)
+    
+    // Paraphonic voices (8 voices max)
+    static constexpr int MAX_VOICES = 8;
+    std::array<Neon37Voice, MAX_VOICES> voices;
+    uint64_t voiceAllocationCounter = 0;  // Incremented on each voice allocation to track age
+    bool lastBlockHadAnyActiveVoices = false;  // Track if previous block had active voices (for envelope retrigger logic)
+    
+    // Global LFO modulation
+    Neon37LFO lfo1;
+    Neon37LFO lfo2;
+    float modWheelValue = 0.0f;  // 0-1, from MIDI CC1 (defaults to 0 when enabled, forced to 1 when disabled)
+    bool modWheelEnabled = false;
+    
+    // Velocity and Aftertouch tracking
+    float currentVelocity = 0.0f;  // 0-1, from MIDI note-on velocity
+    float currentAftertouch = 0.0f;  // 0-1, from MIDI channel aftertouch (CC176)
+    float pitchBendValue = 0.0f;  // -1 to +1, from MIDI pitch bend
+    
+    // Helper function to generate waveform samples
+    float generateWaveform(float phase, int waveformType);
+    
+    // Helper function to generate LFO waveforms
+    float generateLFOWaveform(float phase, int waveformType);
+    
+    // Helper to convert sync index (0-10) to time multiplier
+    float getSyncMultiplier(int syncIndex);
+    
+    // Refactored helper functions for cleaner processBlock
+    struct ModulationState {
+        float pitchModSemitones;
+        float totalFilterModMultiplier;
+        float totalAmpModMultiplier;
+    };
+    
+    void calculateAllModulations(ModulationState& modState, float lfoFilterMod, float lfoPitchMod, float lfoAmpMod, float modWheelScale);
+    float calculateModulatedCutoff(float baseCutoff, float filterEnvValue, float egDepth, float totalFilterModMultiplier, float resonance) const;
+    int allocateVoice();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Neon37AudioProcessor)
 };

@@ -82,19 +82,13 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     modBottomSection.addAndMakeVisible(velPitch);
     modBottomSection.addAndMakeVisible(velFilter);
     modBottomSection.addAndMakeVisible(velAmp);
-    modBottomSection.addAndMakeVisible(velMwBtn);
-    
     modBottomSection.addAndMakeVisible(atLabel);
     modBottomSection.addAndMakeVisible(atPitch);
     modBottomSection.addAndMakeVisible(atFilter);
     modBottomSection.addAndMakeVisible(atAmp);
-    modBottomSection.addAndMakeVisible(atMwBtn);
 
     modBottomSection.addAndMakeVisible(pbLabel);
     modBottomSection.addAndMakeVisible(pbPitch);
-    modBottomSection.addAndMakeVisible(pbFilter);
-    modBottomSection.addAndMakeVisible(pbAmp);
-    modBottomSection.addAndMakeVisible(pbMwBtn);
     
     masterSection.addAndMakeVisible(masterVolume);
     masterSection.addAndMakeVisible(masterFreq);
@@ -291,16 +285,9 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
 
     pbPitchAttach = std::make_unique<SliderAttachment>(apvts, "pb_pitch", pbPitch.slider);
     setupKnob(pbPitch, "pb_pitch");
-    pbFilterAttach = std::make_unique<SliderAttachment>(apvts, "pb_filter", pbFilter.slider);
-    setupKnob(pbFilter, "pb_filter");
-    pbAmpAttach = std::make_unique<SliderAttachment>(apvts, "pb_amp", pbAmp.slider);
-    setupKnob(pbAmp, "pb_amp");
 
-    lfo1MwAttach = std::make_unique<ButtonAttachment>(apvts, "lfo1_mw", lfo1MwBtn);
+    lfo1MwAttach = std::make_unique<ButtonAttachment>(apvts, "mw_enable", lfo1MwBtn);  // Global MW Enable
     lfo2MwAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_mw", lfo2MwBtn);
-    velMwAttach = std::make_unique<ButtonAttachment>(apvts, "vel_mw", velMwBtn);
-    atMwAttach = std::make_unique<ButtonAttachment>(apvts, "at_mw", atMwBtn);
-    pbMwAttach = std::make_unique<ButtonAttachment>(apvts, "pb_mw", pbMwBtn);
     
     // Setup parameter value tooltip
     addAndMakeVisible(parameterValueTooltip);
@@ -437,9 +424,33 @@ void Neon37AudioProcessorEditor::resized()
     auto rowH = modBArea.getHeight() / 5;
     layoutModRow(modBArea.removeFromTop(rowH), lfo1Label, nullptr, lfo1Pitch, lfo1Filter, lfo1Amp, lfo1MwBtn);
     layoutModRow(modBArea.removeFromTop(rowH), lfo2Label, nullptr, lfo2Pitch, lfo2Filter, lfo2Amp, lfo2MwBtn);
-    layoutModRow(modBArea.removeFromTop(rowH), velLabel, nullptr, velPitch, velFilter, velAmp, velMwBtn);
-    layoutModRow(modBArea.removeFromTop(rowH), atLabel, nullptr, atPitch, atFilter, atAmp, atMwBtn);
-    layoutModRow(modBArea.removeFromTop(rowH), pbLabel, nullptr, pbPitch, pbFilter, pbAmp, pbMwBtn);
+    
+    // Velocity row - no MW button
+    {
+        auto row = modBArea.removeFromTop(rowH);
+        velLabel.setBounds(row.removeFromTop(20));
+        auto knobW = row.getWidth() / 3;
+        velPitch.setBounds(row.removeFromLeft(knobW));
+        velFilter.setBounds(row.removeFromLeft(knobW));
+        velAmp.setBounds(row.removeFromLeft(knobW));
+    }
+    
+    // Aftertouch row - no MW button
+    {
+        auto row = modBArea.removeFromTop(rowH);
+        atLabel.setBounds(row.removeFromTop(20));
+        auto knobW = row.getWidth() / 3;
+        atPitch.setBounds(row.removeFromLeft(knobW));
+        atFilter.setBounds(row.removeFromLeft(knobW));
+        atAmp.setBounds(row.removeFromLeft(knobW));
+    }
+    
+    // Pitch Bend row - only pitch control
+    {
+        auto row = modBArea.removeFromTop(rowH);
+        pbLabel.setBounds(row.removeFromTop(20));
+        pbPitch.setBounds(row.removeFromLeft(row.getWidth()));
+    }
     
     // Layout knobs within sections - split oscillator section in half
     auto oscArea = oscillatorSection.getLocalBounds().withTrimmedTop(40).reduced(15);
