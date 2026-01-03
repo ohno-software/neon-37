@@ -11,24 +11,24 @@ Neon37Voice::Neon37Voice()
         phase = phase - std::floor(phase); // Normalize to 0-1
         
         switch (waveType) {
-            case 0: // Sine - pure sine wave
-                return std::sin (x);
-                
-            case 1: { // Triangle - Moog-style with slight rounding
+            case 0: { // Triangle
                 float tri = 4.0f * std::abs(phase - 0.5f) - 1.0f;
                 return tri;
             }
             
-            case 2: { // Sawtooth - Moog-style with DC offset correction
+            case 1: { // Sawtooth
                 float saw = 2.0f * phase - 1.0f;
                 return saw;
             }
             
-            case 3: // Square - 50% duty cycle
+            case 2: // Square - 50% duty cycle
                 return phase < 0.5f ? 1.0f : -1.0f;
                 
-            case 4: // Pulse - Variable duty cycle
-                return phase < currentPw ? 1.0f : -1.0f;
+            case 3: // 25% Pulse
+                return phase < 0.25f ? 1.0f : -1.0f;
+                
+            case 4: // 10% Pulse
+                return phase < 0.10f ? 1.0f : -1.0f;
                 
             default:
                 return std::sin (x);
@@ -49,21 +49,49 @@ Neon37Voice::Neon37Voice()
         return juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
     });
 
-    auto lfoWaveFunc = [](float x, int waveType) {
+    lfo1.initialise([this](float x) {
         float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
         phase = phase - std::floor(phase);
-        switch (waveType) {
-            case 0: return std::sin(x); // Sine
-            case 1: return 4.0f * std::abs(phase - 0.5f) - 1.0f; // Triangle
-            case 2: return 2.0f * phase - 1.0f; // Saw
-            case 3: return phase < 0.5f ? 1.0f : -1.0f; // Square
-            case 4: return phase < 0.25f ? 1.0f : -1.0f; // Pulse (25%)
-            default: return std::sin(x);
+        
+        float out = 0.0f;
+        switch (currentLfo1Wave) {
+            case 0: out = std::sin(x); break; // Sine
+            case 1: out = 2.0f * phase - 1.0f; break; // Saw Up
+            case 2: out = 1.0f - 2.0f * phase; break; // Saw Down
+            case 3: out = phase < 0.5f ? 1.0f : -1.0f; break; // Square
+            case 4: // S&H
+                if (phase < lfo1LastPhase) {
+                    lfo1LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
+                }
+                out = lfo1LastSH;
+                break;
+            default: out = std::sin(x); break;
         }
-    };
+        lfo1LastPhase = phase;
+        return out;
+    });
 
-    lfo1.initialise([this, lfoWaveFunc](float x) { return lfoWaveFunc(x, currentLfo1Wave); });
-    lfo2.initialise([this, lfoWaveFunc](float x) { return lfoWaveFunc(x, currentLfo2Wave); });
+    lfo2.initialise([this](float x) {
+        float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
+        phase = phase - std::floor(phase);
+        
+        float out = 0.0f;
+        switch (currentLfo2Wave) {
+            case 0: out = std::sin(x); break; // Sine
+            case 1: out = 2.0f * phase - 1.0f; break; // Saw Up
+            case 2: out = 1.0f - 2.0f * phase; break; // Saw Down
+            case 3: out = phase < 0.5f ? 1.0f : -1.0f; break; // Square
+            case 4: // S&H
+                if (phase < lfo2LastPhase) {
+                    lfo2LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
+                }
+                out = lfo2LastSH;
+                break;
+            default: out = std::sin(x); break;
+        }
+        lfo2LastPhase = phase;
+        return out;
+    });
 }
 
 bool Neon37Voice::canPlaySound (juce::SynthesiserSound* sound)
@@ -89,38 +117,84 @@ void Neon37Voice::startNote (int midiNoteNumber, float velocity, juce::Synthesis
     };
     
     float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
+    pitchOverrideMidiNote = midiNoteNumber;
     baseOsc1Freq = baseFreq * getOctaveMult(currentOsc1Octave) * std::pow(2.0f, (currentOsc1Semitones + currentOsc1Fine) / 12.0f);
     baseOsc2Freq = baseFreq * getOctaveMult(currentOsc2Octave) * std::pow(2.0f, (currentOsc2Semitones + currentOsc2Fine) / 12.0f);
     baseSub1Freq = baseOsc1Freq * 0.5f;
     
+    // Force immediate frequency changes, no smoothing
     osc1.setFrequency (baseOsc1Freq, true);
     osc2.setFrequency (baseOsc2Freq, true);
     sub1.setFrequency (baseSub1Freq, true);
     
-    osc1.reset();
-    osc2.reset();
-    sub1.reset();
+    // Reset oscillators only for NEW voices (not currently playing)
+    // For Para-L: each new note in the chord gets a fresh voice, so reset it
+    // For Mono-L: legato notes reuse the same voice without calling startNote,
+    // so this only resets on the very first note
+    if (!isVoiceActive())
+    {
+        osc1.reset();
+        osc2.reset();
+        sub1.reset();
+    }
+    
+    // Start envelopes
+    bool isLegato = (currentVoiceMode == 0 || currentVoiceMode == 2);
+    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
     
     // Reset filter to prevent clicks from previous state
-    // Calculate initial filter cutoff to avoid "wah" at start
-    // If attack is 0, we want to start at the "open" position.
-    // If attack > 0, we start at the "closed" position.
-    float initialEnv1 = (env1Params.attack <= 0.001f) ? 1.0f : 0.0f;
-    if (useExpEnv) initialEnv1 *= initialEnv1;
+    // Only reset filter for Poly mode or first note in Para/Mono modes
+    // For legato modes, check paraState activeNotes rather than voice count
+    // because mono mode kills/restarts voices which resets voice count to 0
+    bool shouldResetFilter = false;
+    if (!isParaOrMono)
+    {
+        shouldResetFilter = true; // Poly mode always resets
+    }
+    else if (isLegato && paraState)
+    {
+        // For legato modes, only reset if no notes are currently held
+        shouldResetFilter = (paraState->activeNotes == 0);
+    }
+    else if (paraState)
+    {
+        // For non-legato Para/Mono modes, reset on first note
+        shouldResetFilter = (paraState->activeNotes == 0);
+    }
     
-    float initialCutoff = currentFilterCutoff * std::pow(2.0f, (initialEnv1 * currentFilterEgDepth));
-    initialCutoff = juce::jlimit(20.0f, 20000.0f, initialCutoff);
-    voiceFilter.setCutoffFrequencyHz(initialCutoff);
-    voiceFilter.reset();
+    if (shouldResetFilter)
+    {
+        // Calculate initial filter cutoff to avoid "wah" at start
+        // If attack is 0, we want to start at the "open" position.
+        // If attack > 0, we start at the "closed" position.
+        float initialEnv1 = (env1Params.attack <= 0.001f) ? 1.0f : 0.0f;
+        if (useExpEnv) initialEnv1 *= initialEnv1;
+        
+        float initialCutoff = currentFilterCutoff * std::pow(2.0f, (initialEnv1 * currentFilterEgDepth));
+        initialCutoff = juce::jlimit(20.0f, 20000.0f, initialCutoff);
+        voiceFilter.setCutoffFrequencyHz(initialCutoff);
+        voiceFilter.reset();
+    }
     
     fadeOutCounter = -1; // Reset fade-out
-
-    // Start envelopes
-    if (currentLegatoMode && activeVoiceCount > 0)
+    
+    if (isParaOrMono)
+    {
+        // Envelopes are handled by the processor for Para/Mono modes
+        // Ensure per-voice envelopes are completely off
+        env1.reset();
+        env2.reset();
+        // Para-L needs a small fade to prevent pops when notes are added to the chord
+        bool isParaL = (currentVoiceMode == 2);
+        fadeInCounter = isParaL ? 0 : -1;
+    }
+    else if (isLegato && activeVoiceCount > 0)
     {
         // Legato: only start if not already active
         if (!env2.isActive())
         {
+            env1.reset();
+            env2.reset();
             env1.noteOn();
             env2.noteOn();
             fadeInCounter = 0;
@@ -130,23 +204,77 @@ void Neon37Voice::startNote (int midiNoteNumber, float velocity, juce::Synthesis
     else
     {
         // Normal or first note: retrigger
+        env1.reset();
+        env2.reset();
         env1.noteOn();
         env2.noteOn();
         fadeInCounter = 0;
     }
 }
 
+void Neon37Voice::retuneToMidiNote (int midiNoteNumber)
+{
+    // Retune without restarting envelopes/filters/osc phase.
+    auto getOctaveMult = [](float choice) -> float {
+        int octave = (int)choice;
+        switch (octave) {
+            case 0: return 0.5f; // 16'
+            case 1: return 1.0f; // 8'
+            case 2: return 2.0f; // 4'
+            case 3: return 4.0f; // 2'
+            default: return 1.0f;
+        }
+    };
+
+    pitchOverrideMidiNote = midiNoteNumber;
+    float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
+    baseOsc1Freq = baseFreq * getOctaveMult(currentOsc1Octave) * std::pow(2.0f, (currentOsc1Semitones + currentOsc1Fine) / 12.0f);
+    baseOsc2Freq = baseFreq * getOctaveMult(currentOsc2Octave) * std::pow(2.0f, (currentOsc2Semitones + currentOsc2Fine) / 12.0f);
+    baseSub1Freq = baseOsc1Freq * 0.5f;
+
+    osc1.setFrequency (baseOsc1Freq, true);
+    osc2.setFrequency (baseOsc2Freq, true);
+    sub1.setFrequency (baseSub1Freq, true);
+}
+
 void Neon37Voice::stopNote (float velocity, bool allowTailOff)
 {
     juce::ignoreUnused (velocity);
-    env1.noteOff();
-    env2.noteOff();
+
+    pitchOverrideMidiNote = -1;
     
-    // Start fade-out to prevent click at note-off
-    fadeOutCounter = 0;
+    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
+    if (!isParaOrMono)
+    {
+        env1.noteOff();
+        env2.noteOff();
+    }
     
-    if (!allowTailOff || !env2.isActive())
+    if (!allowTailOff)
+    {
         clearCurrentNote();
+    }
+    else
+    {
+        // Poly mode uses fade-out for voice management
+        // Para modes also need fade-out to prevent pops when individual notes are released
+        bool isParaL = (currentVoiceMode == 2);
+        bool isPara = (currentVoiceMode == 3);
+        
+        if (!isParaOrMono || isParaL || isPara)
+        {
+            // For Para modes, only fade out if other notes are still held.
+            // If it's the last note, let it follow the shared envelope release.
+            if ((isParaL || isPara) && paraState && paraState->activeNotes == 0)
+            {
+                // Last note, don't fade out here, let shared envelope handle it
+            }
+            else
+            {
+                fadeOutCounter = 0;
+            }
+        }
+    }
 }
 
 void Neon37Voice::pitchWheelMoved (int newPitchWheelValue) 
@@ -171,6 +299,8 @@ void Neon37Voice::prepareToPlay (double sampleRate, int samplesPerBlock, int out
     osc2.prepare (spec);
     sub1.prepare (spec);
     noise.prepare (spec);
+    lfo1.prepare (spec);
+    lfo2.prepare (spec);
     
     osc1Gain.prepare (spec);
     osc2Gain.prepare (spec);
@@ -185,6 +315,11 @@ void Neon37Voice::prepareToPlay (double sampleRate, int samplesPerBlock, int out
     env1.setSampleRate (sampleRate);
     env2.setSampleRate (sampleRate);
     
+    lfo1LastPhase = 0.0f;
+    lfo1LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
+    lfo2LastPhase = 0.0f;
+    lfo2LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
+
     // Negate all default smoothing/ramping for maximum snappiness
     osc1Gain.setRampDurationSeconds (0.0);
     osc2Gain.setRampDurationSeconds (0.0);
@@ -192,8 +327,8 @@ void Neon37Voice::prepareToPlay (double sampleRate, int samplesPerBlock, int out
     noiseGain.setRampDurationSeconds (0.0);
 
     currentSampleRate = sampleRate;
-    fadeInSamples = 0;   // Truly instant attack
-    fadeOutSamples = (int)(0.002 * sampleRate); // Keep a tiny bit of fade-out to prevent pops on release
+    fadeInSamples = (int)(0.004 * sampleRate);   // 4ms fade-in for Para-L
+    fadeOutSamples = (int)(0.010 * sampleRate);  // 10ms fade-out for Para-L and Poly
 
     synthBuffer.setSize (outputChannels, samplesPerBlock);
     isPrepared = true;
@@ -201,8 +336,11 @@ void Neon37Voice::prepareToPlay (double sampleRate, int samplesPerBlock, int out
 
 void Neon37Voice::retriggerEnvelopes()
 {
+    env1.reset();
+    env2.reset();
     env1.noteOn();
     env2.noteOn();
+    voiceFilter.reset();
     fadeInCounter = 0;
 }
 
@@ -234,7 +372,7 @@ void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1
                                    float atPitch, float atFilter, float atAmp,
                                    float pbPitch, float pbFilter, float pbAmp,
                                    bool lfo1Mw, bool lfo2Mw, bool velMw, bool atMw, bool pbMw,
-                                   bool legatoMode, bool paraMode, int numActiveVoices)
+                                   int voiceMode, int numActiveVoices)
 {
     juce::ignoreUnused(lfo1Sync, lfo2Sync);
     currentOsc1Wave = (int)osc1Wave;
@@ -258,11 +396,26 @@ void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1
     useExpEnv = expEnv;
 
     // Store mod parameters
-    modLfo1Pitch = lfo1Pitch; modLfo1Filter = lfo1Filter; modLfo1Amp = lfo1Amp;
-    modLfo2Pitch = lfo2Pitch; modLfo2Filter = lfo2Filter; modLfo2Amp = lfo2Amp;
-    modVelPitch = velPitch; modVelFilter = velFilter; modVelAmp = velAmp;
-    modAtPitch = atPitch; modAtFilter = atFilter; modAtAmp = atAmp;
-    modPbPitch = pbPitch; modPbFilter = pbFilter; modPbAmp = pbAmp;
+    modLfo1Pitch = 12.0f * (std::pow(2.0f, lfo1Pitch) - 1.0f); 
+    modLfo1Filter = lfo1Filter; 
+    modLfo1Amp = lfo1Amp;
+    
+    modLfo2Pitch = 12.0f * (std::pow(2.0f, lfo2Pitch) - 1.0f); 
+    modLfo2Filter = lfo2Filter; 
+    modLfo2Amp = lfo2Amp;
+    
+    // Velocity and Aftertouch need proper scaling for filter modulation
+    modVelPitch = velPitch; 
+    modVelFilter = velFilter * 4.0f;  // Scale to match LFO range
+    modVelAmp = velAmp;
+    
+    modAtPitch = atPitch; 
+    modAtFilter = atFilter * 4.0f;    // Scale to match LFO range
+    modAtAmp = atAmp;
+    
+    modPbPitch = pbPitch; 
+    modPbFilter = pbFilter * 5.0f;    // Scale to match LFO range
+    modPbAmp = pbAmp;
     
     modLfo1Mw = lfo1Mw;
     modLfo2Mw = lfo2Mw;
@@ -270,8 +423,7 @@ void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1
     modAtMw = atMw;
     modPbMw = pbMw;
 
-    currentLegatoMode = legatoMode;
-    currentParaMode = paraMode;
+    currentVoiceMode = voiceMode;
     activeVoiceCount = numActiveVoices;
 
     lfo1.setFrequency(lfo1Rate);
@@ -289,7 +441,8 @@ void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1
     
     if (isVoiceActive())
     {
-        float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (getCurrentlyPlayingNote());
+        const int noteForPitch = (pitchOverrideMidiNote >= 0) ? pitchOverrideMidiNote : getCurrentlyPlayingNote();
+        float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (noteForPitch);
         // Apply octave, semitones, and fine tuning (fine is in semitones/cents)
         baseOsc1Freq = baseFreq * getOctaveMult((int)osc1Octave) * std::pow(2.0f, (osc1Semitones + osc1Fine) / 12.0f);
         baseOsc2Freq = baseFreq * getOctaveMult((int)osc2Octave) * std::pow(2.0f, (osc2Semitones + osc2Fine) / 12.0f);
@@ -320,8 +473,24 @@ void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1
 
 void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples)
 {
-    if (!isPrepared || !env2.isActive())
+    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
+    
+    // Check if voice should render
+    if (!isPrepared)
         return;
+    
+    if (isParaOrMono)
+    {
+        // For Para/Mono modes, check if voice is playing a note
+        if (!isVoiceActive())
+            return;
+    }
+    else
+    {
+        // For Poly mode, check per-voice envelope
+        if (!env2.isActive())
+            return;
+    }
 
     synthBuffer.clear();
     
@@ -333,47 +502,60 @@ void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int s
     {
         int numThisTime = std::min (subBlockSize, samplesRemaining);
         
-        float avgEnv1 = 0.0f;
-        float avgModFilter = 0.0f;
-        float avgModPitch = 0.0f;
-        float avgModAmp = 0.0f;
+        // Get modulation values at the start of this sub-block for the filter
+        float currentEnv1 = 0.0f;
+        if (isParaOrMono && paraState)
+            currentEnv1 = paraState->env1Buffer.getSample(0, currentStartSample);
+        else
+        {
+            currentEnv1 = env1.getNextSample();
+            if (useExpEnv) currentEnv1 = currentEnv1 * currentEnv1;
+        }
+        lastEnv1Value = currentEnv1;
 
-        // 1. Render oscillators and calculate modulations for this sub-block
+        float lfo1ValStart = lfo1.processSample(0.0f);
+        float lfo2ValStart = lfo2.processSample(0.0f);
+        
+        float mwLfo1 = modLfo1Mw ? currentModWheel : 1.0f;
+        float mwLfo2 = modLfo2Mw ? currentModWheel : 1.0f;
+        float mwVel = modVelMw ? currentModWheel : 1.0f;
+        float mwAt = modAtMw ? currentModWheel : 1.0f;
+        float mwPb = modPbMw ? currentModWheel : 1.0f;
+
+        float modFilterStart = (lfo1ValStart * modLfo1Filter * mwLfo1 * 5.0f) + 
+                               (lfo2ValStart * modLfo2Filter * mwLfo2 * 5.0f) + 
+                               (currentVelocity * modVelFilter * mwVel) + 
+                               (currentAftertouch * modAtFilter * mwAt) +
+                               (currentPitchBend * modPbFilter * mwPb);
+
+        float modulatedCutoff = currentFilterCutoff * std::pow(2.0f, (currentEnv1 * currentFilterEgDepth) + modFilterStart);
+        modulatedCutoff = juce::jlimit(20.0f, 20000.0f, modulatedCutoff);
+        
+        voiceFilter.setCutoffFrequencyHz(modulatedCutoff);
+        voiceFilter.setResonance(currentFilterResonance);
+        voiceFilter.setDrive(currentFilterDrive);
+
+        // 1. Render oscillators for this sub-block
         for (int s = 0; s < numThisTime; ++s) {
             int bufferIdx = currentStartSample + s;
-            float env1Val = env1.getNextSample();
-            if (useExpEnv) env1Val = env1Val * env1Val;
-            lastEnv1Value = env1Val;
-            avgEnv1 += env1Val;
+            
+            // Advance env1 per sample to keep it in sync, even if we only used the start value for the filter
+            if (s > 0 && !isParaOrMono) {
+                float e1 = env1.getNextSample();
+                if (useExpEnv) e1 = e1 * e1;
+                lastEnv1Value = e1;
+            }
 
-            float lfo1Val = lfo1.processSample(0.0f);
-            float lfo2Val = lfo2.processSample(0.0f);
-
-            // Mod Wheel scaling
-            float mwLfo1 = modLfo1Mw ? currentModWheel : 1.0f;
-            float mwLfo2 = modLfo2Mw ? currentModWheel : 1.0f;
-            float mwVel = modVelMw ? currentModWheel : 1.0f;
-            float mwAt = modAtMw ? currentModWheel : 1.0f;
-            float mwPb = modPbMw ? currentModWheel : 1.0f;
-
+            // For the first sample of the sub-block, we use the values we already calculated
+            float lfo1Val = (s == 0) ? lfo1ValStart : lfo1.processSample(0.0f);
+            float lfo2Val = (s == 0) ? lfo2ValStart : lfo2.processSample(0.0f);
+            
             // Pitch bend quantized to semitones
             float pbPitchOffset = std::round(currentPitchBend * modPbPitch);
 
             float modPitch = (lfo1Val * modLfo1Pitch * mwLfo1) + (lfo2Val * modLfo2Pitch * mwLfo2) + 
                              (currentVelocity * modVelPitch * mwVel) + (currentAftertouch * modAtPitch * mwAt) +
                              (pbPitchOffset * mwPb);
-            
-            float modFilter = (lfo1Val * modLfo1Filter * mwLfo1) + (lfo2Val * modLfo2Filter * mwLfo2) + 
-                              (currentVelocity * modVelFilter * mwVel) + (currentAftertouch * modAtFilter * mwAt) +
-                              (currentPitchBend * modPbFilter * mwPb);
-
-            float modAmp = (lfo1Val * modLfo1Amp * mwLfo1) + (lfo2Val * modLfo2Amp * mwLfo2) + 
-                           (currentVelocity * modVelAmp * mwVel) + (currentAftertouch * modAtAmp * mwAt) +
-                           (currentPitchBend * modPbAmp * mwPb);
-
-            avgModFilter += modFilter;
-            avgModPitch += modPitch;
-            avgModAmp += modAmp;
 
             float pitchMult = std::pow(2.0f, modPitch / 12.0f);
             osc1.setFrequency(baseOsc1Freq * pitchMult);
@@ -390,21 +572,9 @@ void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int s
                 synthBuffer.setSample(c, bufferIdx, val);
         }
 
-        // 2. Apply filter for this sub-block
-        avgEnv1 /= (float)numThisTime;
-        avgModFilter /= (float)numThisTime;
-        
-        float modulatedCutoff = currentFilterCutoff * std::pow(2.0f, (avgEnv1 * currentFilterEgDepth) + (avgModFilter * 5.0f));
-        modulatedCutoff = juce::jlimit(20.0f, 20000.0f, modulatedCutoff);
-        
-        voiceFilter.setCutoffFrequencyHz(modulatedCutoff);
-        voiceFilter.setResonance(currentFilterResonance);
-        voiceFilter.setDrive(currentFilterDrive);
-        
+        // 2. Process filter for this sub-block
         auto subBlock = juce::dsp::AudioBlock<float> (synthBuffer).getSubBlock((size_t)currentStartSample, (size_t)numThisTime);
         
-        // Pre-filter boost to push the ladder filter's internal saturation harder
-        // This makes the 'Drive' feel much more aggressive
         if (currentFilterDrive > 1.0f)
             subBlock.multiplyBy(1.0f + (currentFilterDrive - 1.0f) * 0.15f);
 
@@ -412,16 +582,28 @@ void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int s
         voiceFilter.process(context);
         
         // 3. Apply amplitude envelope for this sub-block
-        avgModAmp /= (float)numThisTime;
-        float modAmpGain = juce::jlimit(0.0f, 1.0f, 1.0f + avgModAmp);
-
         for (int s = 0; s < numThisTime; ++s) {
             int bufferIdx = currentStartSample + s;
-            float env2Val = env2.getNextSample();
-            if (useExpEnv) env2Val = env2Val * env2Val;
-            float fadeGain = 1.0f;
             
-            if (fadeInCounter < fadeInSamples) {
+            float env2Val = 0.0f;
+            if (isParaOrMono && paraState)
+                env2Val = paraState->env2Buffer.getSample(0, bufferIdx);
+            else
+            {
+                env2Val = env2.getNextSample();
+                if (useExpEnv) env2Val = env2Val * env2Val;
+            }
+            
+            // To keep it simple and fast, we'll use the start value for modAmp in this sub-block
+            // since amp smoothing is less noticeable than filter smoothing.
+            float modAmpStart = (lfo1ValStart * modLfo1Amp * mwLfo1) + (lfo2ValStart * modLfo2Amp * mwLfo2) + 
+                                (currentVelocity * modVelAmp * mwVel) + (currentAftertouch * modAtAmp * mwAt) +
+                                (currentPitchBend * modPbAmp * mwPb);
+            
+            float modAmpGain = juce::jlimit(0.0f, 1.0f, 1.0f + modAmpStart);
+
+            float fadeGain = 1.0f;
+            if (fadeInCounter >= 0 && fadeInCounter < fadeInSamples) {
                 fadeGain *= (float)fadeInCounter / (float)fadeInSamples;
                 fadeInCounter++;
             }
@@ -447,8 +629,34 @@ void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int s
         outputBuffer.addFrom (channel, startSample, synthBuffer, channel, 0, numSamples);
     }
 
-    if ((fadeOutCounter >= fadeOutSamples) || !env2.isActive())
-        clearCurrentNote();
+    // Clear voice if fade-out complete or envelope finished
+    if (isParaOrMono)
+    {
+        // Para modes need to wait for BOTH fade-out AND shared envelope release
+        bool isParaL = (currentVoiceMode == 2);
+        bool isPara = (currentVoiceMode == 3);
+        
+        if (isParaL || isPara)
+        {
+            // For Para: wait for fade to complete OR shared envelope to finish
+            bool fadeComplete = (fadeOutCounter >= fadeOutSamples && fadeOutCounter != -1);
+            bool envelopeFinished = (paraState && paraState->activeNotes == 0 && !paraState->env2.isActive());
+            
+            if (fadeComplete || envelopeFinished)
+                clearCurrentNote();
+        }
+        else
+        {
+            // For Mono modes: keep rendering through the shared release tail
+            if (paraState && paraState->activeNotes == 0 && !paraState->env2.isActive())
+                clearCurrentNote();
+        }
+    }
+    else
+    {
+        if ((fadeOutCounter >= fadeOutSamples) || !env2.isActive())
+            clearCurrentNote();
+    }
 }
 
 // --- Neon37AudioProcessor Implementation ---
@@ -468,8 +676,12 @@ Neon37AudioProcessor::Neon37AudioProcessor()
 #endif
     apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    for (int i = 0; i < 8; ++i)
-        synth.addVoice (new Neon37Voice());
+    paraState = std::make_shared<ParaphonicState>();
+    for (int i = 0; i < 8; ++i) {
+        auto* v = new Neon37Voice();
+        v->setParaState(paraState);
+        synth.addVoice (v);
+    }
     
     synth.addSound (new Neon37Sound());
 }
@@ -480,7 +692,7 @@ Neon37AudioProcessor::~Neon37AudioProcessor()
 
 const juce::String Neon37AudioProcessor::getName() const
 {
-    return JucePlugin_Name;
+    return "Neon37";
 }
 
 bool Neon37AudioProcessor::acceptsMidi() const
@@ -544,6 +756,7 @@ void Neon37AudioProcessor::changeProgramName (int index, const juce::String& new
 void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     synth.setCurrentPlaybackSampleRate (sampleRate);
+    paraState->prepare(sampleRate, samplesPerBlock);
     
     for (int i = 0; i < synth.getNumVoices(); ++i)
     {
@@ -592,10 +805,38 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    bool monoMode = *apvts.getRawParameterValue("mono_mode") > 0.5f;
+    int voiceMode = (int)*apvts.getRawParameterValue("voice_mode");
+    bool monoMode = (voiceMode == 0 || voiceMode == 1);
+    bool paraMode = (voiceMode == 2 || voiceMode == 3);
     bool holdMode = *apvts.getRawParameterValue("hold_mode") > 0.5f;
-    bool legatoMode = *apvts.getRawParameterValue("legato_mode") > 0.5f;
-    bool paraMode = *apvts.getRawParameterValue("para_mode") > 0.5f;
+    bool expEnv = *apvts.getRawParameterValue("env_exp_curv") > 0.5f;
+    
+    // Panic on mode change
+    if (voiceMode != lastVoiceMode)
+    {
+        for (int i = 0; i < synth.getNumVoices(); ++i)
+            synth.getVoice(i)->stopNote(0.0f, false);
+        heldNotes.clear();
+        physicallyHeldNotes.clear();
+        currentPlayingNote = -1;
+        paraState->activeNotes = 0;
+        paraState->env1.reset();
+        paraState->env2.reset();
+        lastVoiceMode = voiceMode;
+    }
+
+    // Update Paraphonic State Envelopes
+    juce::ADSR::Parameters p1, p2;
+    p1.attack = *apvts.getRawParameterValue("env1_attack");
+    p1.decay = *apvts.getRawParameterValue("env1_decay");
+    p1.sustain = *apvts.getRawParameterValue("env1_sustain");
+    p1.release = *apvts.getRawParameterValue("env1_release");
+    p2.attack = *apvts.getRawParameterValue("env2_attack");
+    p2.decay = *apvts.getRawParameterValue("env2_decay");
+    p2.sustain = *apvts.getRawParameterValue("env2_sustain");
+    p2.release = *apvts.getRawParameterValue("env2_release");
+    paraState->env1.setParameters(p1);
+    paraState->env2.setParameters(p2);
 
     // Handle Hold Mode transition (OFF -> ON is fine, ON -> OFF needs to release notes)
     if (lastHoldState && !holdMode)
@@ -623,14 +864,35 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 physicallyHeldNotes.push_back(msg.getNoteNumber());
             
             processedMidi.addEvent(msg, metadata.samplePosition);
-            
-            // Paraphonic retrigger logic for Poly mode
-            if (!monoMode && paraMode && !legatoMode)
+
+            // Envelope/key-gate handling differs by architecture:
+            // - Para/Poly: scanned keyboard; handle here.
+            // - Mono: keybed-as-potentiometer; handled in the mono branch below.
+            if (paraMode)
             {
-                for (int i = 0; i < synth.getNumVoices(); ++i)
-                    if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                        if (v->isVoiceActive())
-                            v->retriggerEnvelopes();
+                // Paraphonic retrigger logic
+                if (voiceMode == 3) // Para (retrigger all)
+                {
+                    paraState->env1.reset();
+                    paraState->env2.reset();
+                    paraState->env1.noteOn();
+                    paraState->env2.noteOn();
+                    paraState->justNoteOn = true;
+                }
+                else
+                {
+                    // Para-L: only trigger on first key press
+                    if (paraState->activeNotes == 0)
+                    {
+                        paraState->env1.reset();
+                        paraState->env2.reset();
+                        paraState->env1.noteOn();
+                        paraState->env2.noteOn();
+                        paraState->justNoteOn = true;
+                    }
+                }
+
+                paraState->activeNotes++;
             }
         }
         else if (msg.isNoteOff())
@@ -638,7 +900,41 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             physicallyHeldNotes.erase(std::remove(physicallyHeldNotes.begin(), physicallyHeldNotes.end(), msg.getNoteNumber()), physicallyHeldNotes.end());
             
             if (!holdMode)
-                processedMidi.addEvent(msg, metadata.samplePosition);
+            {
+                if (paraMode)
+                {
+                    // Para modes: decrement activeNotes and stop the specific voice
+                    paraState->activeNotes = std::max(0, paraState->activeNotes - 1);
+                    
+                    for (int i = 0; i < synth.getNumVoices(); ++i)
+                    {
+                        if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
+                        {
+                            if (v->getCurrentlyPlayingNote() == msg.getNoteNumber())
+                            {
+                                v->stopNote(0.0f, true);  // Allow tail-off for fade-out
+                            }
+                        }
+                    }
+                    
+                    // Turn off shared envelopes only when all notes released
+                    if (paraState->activeNotes == 0)
+                    {
+                        paraState->env1.noteOff();
+                        paraState->env2.noteOff();
+                    }
+                }
+                else if (monoMode)
+                {
+                    // Mono modes: handled in mono branch below
+                    processedMidi.addEvent(msg, metadata.samplePosition);
+                }
+                else
+                {
+                    // Poly mode: normal note-off handling
+                    processedMidi.addEvent(msg, metadata.samplePosition);
+                }
+            }
         }
         else
         {
@@ -648,72 +944,115 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     if (monoMode)
     {
-        juce::MidiBuffer monoBuffer;
+        // Mono architecture: emulate keybed-as-potentiometer.
+        // - One "CV" (pitch) value at a time (Mono-L: lowest note priority, Mono: last note priority)
+        // - One gate: HIGH if any key held, LOW if no keys held
+        // - Mono-L pitch changes do NOT generate new note-ons (prevents multiple voices/pitches)
+        const bool isMonoL = (voiceMode == 0);
+
+        // Update held notes from the incoming MIDI (scanned input)
         for (const auto metadata : processedMidi)
         {
-            auto msg = metadata.getMessage();
+            const auto msg = metadata.getMessage();
             if (msg.isNoteOn())
             {
                 if (std::find(heldNotes.begin(), heldNotes.end(), msg.getNoteNumber()) == heldNotes.end())
                     heldNotes.push_back(msg.getNoteNumber());
-                std::sort(heldNotes.begin(), heldNotes.end());
-                
-                int targetNote = heldNotes[0];
-                if (targetNote != currentPlayingNote)
-                {
-                    if (currentPlayingNote != -1)
-                        monoBuffer.addEvent(juce::MidiMessage::noteOff(msg.getChannel(), currentPlayingNote), metadata.samplePosition);
-                    
-                    monoBuffer.addEvent(juce::MidiMessage::noteOn(msg.getChannel(), targetNote, msg.getFloatVelocity()), metadata.samplePosition);
-                    currentPlayingNote = targetNote;
-
-                    // Paraphonic retrigger logic for Mono mode
-                    if (paraMode && !legatoMode)
-                    {
-                        for (int i = 0; i < synth.getNumVoices(); ++i)
-                            if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                                if (v->isVoiceActive())
-                                    v->retriggerEnvelopes();
-                    }
-                }
             }
             else if (msg.isNoteOff())
             {
                 heldNotes.erase(std::remove(heldNotes.begin(), heldNotes.end(), msg.getNoteNumber()), heldNotes.end());
-                
-                if (heldNotes.empty())
-                {
-                    if (currentPlayingNote != -1)
-                        monoBuffer.addEvent(juce::MidiMessage::noteOff(msg.getChannel(), currentPlayingNote), metadata.samplePosition);
-                    currentPlayingNote = -1;
-                }
-                else
-                {
-                    int targetNote = heldNotes[0];
-                    if (targetNote != currentPlayingNote)
-                    {
-                        if (currentPlayingNote != -1)
-                            monoBuffer.addEvent(juce::MidiMessage::noteOff(msg.getChannel(), currentPlayingNote), metadata.samplePosition);
-                        
-                        monoBuffer.addEvent(juce::MidiMessage::noteOn(msg.getChannel(), targetNote, 1.0f), metadata.samplePosition);
-                        currentPlayingNote = targetNote;
+            }
+        }
 
-                        // Paraphonic retrigger logic for Mono mode
-                        if (paraMode && !legatoMode)
-                        {
-                            for (int i = 0; i < synth.getNumVoices(); ++i)
-                                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                                    if (v->isVoiceActive())
-                                        v->retriggerEnvelopes();
-                        }
-                    }
-                }
+        const bool gateHigh = !heldNotes.empty();
+        const int desiredNote = gateHigh ?
+            (isMonoL ? *std::min_element(heldNotes.begin(), heldNotes.end()) : heldNotes.back()) :
+            -1;
+
+        juce::MidiBuffer monoBuffer;
+
+        if (!gateHigh)
+        {
+            // Gate LOW: release shared envelopes (tail continues while voices render)
+            if (paraState->activeNotes != 0)
+            {
+                paraState->activeNotes = 0;
+                paraState->env1.noteOff();
+                paraState->env2.noteOff();
+            }
+            currentPlayingNote = -1;
+        }
+        else
+        {
+            // Gate HIGH: ensure envelopes are running
+            if (paraState->activeNotes == 0)
+            {
+                paraState->env1.reset();
+                paraState->env2.reset();
+                paraState->env1.noteOn();
+                paraState->env2.noteOn();
+                paraState->justNoteOn = true;
+                paraState->activeNotes = 1;
+
+                // Start exactly one voice for the gate rising edge
+                for (int i = 0; i < synth.getNumVoices(); ++i)
+                    synth.getVoice(i)->stopNote(0.0f, false);
+
+                monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
+                currentPlayingNote = desiredNote;
             }
             else
             {
-                monoBuffer.addEvent(msg, metadata.samplePosition);
+                // Gate already high
+                if (!isMonoL)
+                {
+                    // Mono (retrigger): restart envelopes and voice on every new desired pitch
+                    if (desiredNote != currentPlayingNote)
+                    {
+                        paraState->env1.reset();
+                        paraState->env2.reset();
+                        paraState->env1.noteOn();
+                        paraState->env2.noteOn();
+                        paraState->justNoteOn = true;
+                        paraState->activeNotes = 1;
+
+                        for (int i = 0; i < synth.getNumVoices(); ++i)
+                            synth.getVoice(i)->stopNote(0.0f, false);
+
+                        monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
+                        currentPlayingNote = desiredNote;
+                    }
+                }
+                else
+                {
+                    // Mono-L: retune the single running voice without generating a new note-on
+                    if (desiredNote != currentPlayingNote)
+                    {
+                        Neon37Voice* active = nullptr;
+                        for (int i = 0; i < synth.getNumVoices(); ++i)
+                        {
+                            if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
+                            {
+                                if (v->isVoiceActive())
+                                {
+                                    if (!active) active = v;
+                                    else v->stopNote(0.0f, false); // enforce single voice
+                                }
+                            }
+                        }
+
+                        if (active)
+                            active->retuneToMidiNote(desiredNote);
+                        else
+                            monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
+
+                        currentPlayingNote = desiredNote;
+                    }
+                }
             }
         }
+
         midiMessages.swapWith(monoBuffer);
     }
     else
@@ -764,7 +1103,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     bool pbMw = *apvts.getRawParameterValue ("pb_mw") > 0.5f;
     
     // Handle MIDI CC and Aftertouch
-    for (const auto metadata : midiMessages)
+    for (const auto metadata : processedMidi)
     {
         auto msg = metadata.getMessage();
         if (msg.isAftertouch())
@@ -784,6 +1123,12 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             for (int i = 0; i < synth.getNumVoices(); ++i)
                 if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
                     v->setModWheel(msg.getControllerValue() / 127.0f);
+        }
+        else if (msg.isPitchWheel())
+        {
+            for (int i = 0; i < synth.getNumVoices(); ++i)
+                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
+                    v->pitchWheelMoved(msg.getPitchWheelValue());
         }
     }
 
@@ -825,19 +1170,22 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 atPitch, atFilter, atAmp,
                 pbPitch, pbFilter, pbAmp,
                 lfo1Mw, lfo2Mw, velMw, atMw, pbMw,
-                *apvts.getRawParameterValue("legato_mode") > 0.5f,
-                *apvts.getRawParameterValue("para_mode") > 0.5f,
+                voiceMode,
                 activeVoices
             );
         }
     }
+
+    // Calculate shared envelopes for Para/Mono modes AFTER MIDI processing
+    if (paraMode || monoMode)
+        paraState->calculate(buffer.getNumSamples(), expEnv);
 
     // Render Synth with per-voice filtering
     synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
 
     // Apply Master Gain
     float masterVolume = *apvts.getRawParameterValue ("master_volume");
-    masterGain.setGainDecibels (masterVolume);
+    masterGain.setGainDecibels (masterVolume - 6.0f);
     
     juce::dsp::AudioBlock<float> block (buffer);
     juce::dsp::ProcessContextReplacing<float> context (block);
@@ -875,13 +1223,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("master_tune", "Master Tune", -100.0f, 100.0f, 0.0f));
 
     // Oscillator 1
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_wave", "Osc 1 Wave", juce::StringArray { "Sine", "Triangle", "Saw", "Square", "Pulse" }, 2));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_wave", "Osc 1 Wave", juce::StringArray { "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 1));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_octave", "Osc 1 Octave", juce::StringArray { "16'", "8'", "4'", "2'" }, 1));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc1_semitones", "Osc 1 Semitones", -12.0f, 12.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc1_fine", "Osc 1 Fine", -0.5f, 0.5f, 0.0f)); // ±50 cents
     
     // Oscillator 2
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_wave", "Osc 2 Wave", juce::StringArray { "Sine", "Triangle", "Saw", "Square", "Pulse" }, 2));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_wave", "Osc 2 Wave", juce::StringArray { "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 1));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_octave", "Osc 2 Octave", juce::StringArray { "16'", "8'", "4'", "2'" }, 1));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc2_semitones", "Osc 2 Semitones", -12.0f, 12.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc2_fine", "Osc 2 Fine", -0.5f, 0.5f, 0.0f)); // ±50 cents
@@ -890,7 +1238,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc_freq", "Osc Frequency", -7.0f, 7.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc_beat", "Beat Rate", -3.5f, 3.5f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("hard_sync", "Hard Sync", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("para_mode", "Paraphonic", false));
 
     // Mixer
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("mixer_osc1", "Mixer Osc 1", juce::NormalisableRange<float> (-60.0f, 10.0f, 0.1f, 2.0f), 0.0f));
@@ -921,9 +1268,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
 
     // Arpeggiator
     params.push_back (std::make_unique<juce::AudioParameterBool> ("arp_on", "Arp On", false)); // Default OFF
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("mono_mode", "Mono Mode", false));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("voice_mode", "Voice Mode", juce::StringArray { "Mono-L", "Mono", "Para-L", "Para", "Poly" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("hold_mode", "Hold Mode", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("legato_mode", "Legato Mode", false));
     
     // Glide/Gliss - defaults to OFF (time = 0)
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("gliss_time", "Gliss Time", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f, 0.3f), 0.0f)); // Default 0 = OFF
@@ -935,7 +1281,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     // LFO 1
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_rate", "LFO 1 Rate", juce::NormalisableRange<float> (0.01f, 50.0f, 0.01f, 0.3f), 1.0f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo1_sync", "LFO 1 Sync", false));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_wave", "LFO 1 Wave", juce::StringArray { "Sine", "Triangle", "Saw", "Square", "Pulse" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_wave", "LFO 1 Wave", juce::StringArray { "Sine", "Saw Up", "Saw Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_pitch", "LFO 1 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_filter", "LFO 1 Filter", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_amp", "LFO 1 Amp", 0.0f, 1.0f, 0.0f));
@@ -943,7 +1289,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     // LFO 2
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_rate", "LFO 2 Rate", juce::NormalisableRange<float> (0.01f, 50.0f, 0.01f, 0.3f), 1.0f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo2_sync", "LFO 2 Sync", false));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_wave", "LFO 2 Wave", juce::StringArray { "Sine", "Triangle", "Saw", "Square", "Pulse" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_wave", "LFO 2 Wave", juce::StringArray { "Sine", "Saw Up", "Saw Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_pitch", "LFO 2 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_filter", "LFO 2 Filter", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_amp", "LFO 2 Amp", 0.0f, 1.0f, 0.0f));

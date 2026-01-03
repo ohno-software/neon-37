@@ -10,12 +10,56 @@ public:
     bool appliesToChannel (int) override { return true; }
 };
 
+struct ParaphonicState {
+    juce::ADSR env1, env2;
+    juce::AudioBuffer<float> env1Buffer, env2Buffer;
+    bool isCalculated = false;
+    int activeNotes = 0;
+    bool justNoteOn = false;
+    
+    void prepare(double sr, int maxBlockSize) {
+        env1.setSampleRate(sr);
+        env2.setSampleRate(sr);
+        env1Buffer.setSize(1, maxBlockSize);
+        env2Buffer.setSize(1, maxBlockSize);
+    }
+    
+    void calculate(int numSamples, bool expEnv) {
+        float* e1 = env1Buffer.getWritePointer(0);
+        float* e2 = env2Buffer.getWritePointer(0);
+        for (int i = 0; i < numSamples; ++i) {
+            e1[i] = env1.getNextSample();
+            e2[i] = env2.getNextSample();
+            if (expEnv) {
+                e1[i] *= e1[i];
+                e2[i] *= e2[i];
+            }
+        }
+
+        // JUCE ADSR can still output a tiny ramp on the first sample even with A=0.
+        // For Moog-style snappy response, snap the first sample to 1.0 on note-on when A is ~0.
+        if (justNoteOn && numSamples > 0)
+        {
+            const auto p1 = env1.getParameters();
+            const auto p2 = env2.getParameters();
+            if (p1.attack <= 1.0e-6f) e1[0] = 1.0f;
+            if (p2.attack <= 1.0e-6f) e2[0] = 1.0f;
+            if (expEnv) {
+                e1[0] *= e1[0];
+                e2[0] *= e2[0];
+            }
+            justNoteOn = false;
+        }
+    }
+};
+
 class Neon37Voice : public juce::SynthesiserVoice
 {
 public:
     Neon37Voice();
     bool canPlaySound (juce::SynthesiserSound* sound) override;
     void startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound* sound, int currentPitchWheelPosition) override;
+    void retuneToMidiNote (int midiNoteNumber);
     void stopNote (float velocity, bool allowTailOff) override;
     void pitchWheelMoved (int newPitchWheelValue) override;
     void controllerMoved (int controllerNumber, int newControllerValue) override;
@@ -38,12 +82,14 @@ public:
                           float atPitch, float atFilter, float atAmp,
                           float pbPitch, float pbFilter, float pbAmp,
                           bool lfo1Mw, bool lfo2Mw, bool velMw, bool atMw, bool pbMw,
-                          bool legatoMode, bool paraMode, int numActiveVoices);
+                          int voiceMode, int numActiveVoices);
     
     float getFilterEnvValue() const { return lastEnv1Value; }
 
     void setAftertouch(float value) { currentAftertouch = value; }
     void setModWheel(float value) { currentModWheel = value; }
+    
+    void setParaState(std::shared_ptr<ParaphonicState> state) { paraState = state; }
 
 private:
     juce::dsp::Oscillator<float> osc1, osc2, sub1;
@@ -51,6 +97,8 @@ private:
     juce::dsp::Oscillator<float> lfo1, lfo2;
     juce::dsp::Gain<float> osc1Gain, osc2Gain, sub1Gain, noiseGain;
     juce::dsp::LadderFilter<float> voiceFilter; // Per-voice filter
+    
+    std::shared_ptr<ParaphonicState> paraState;
     
     int currentOsc1Wave = 2;
     int currentOsc2Wave = 2;
@@ -72,7 +120,7 @@ private:
     float modAtPitch = 0, modAtFilter = 0, modAtAmp = 0;
     float modPbPitch = 2, modPbFilter = 0, modPbAmp = 0;
     bool modLfo1Mw = false, modLfo2Mw = false, modVelMw = false, modAtMw = false, modPbMw = false;
-    bool currentLegatoMode = false, currentParaMode = false;
+    int currentVoiceMode = 0;
     int activeVoiceCount = 0;
 
     float currentVelocity = 0.0f;
@@ -84,9 +132,19 @@ private:
     float baseOsc2Freq = 440.0f;
     float baseSub1Freq = 220.0f;
 
+    // When Mono-L retunes without a new note-on, JUCE's getCurrentlyPlayingNote()
+    // does not change; this stores the effective note used for pitch calculation.
+    int pitchOverrideMidiNote = -1;
+
     juce::ADSR env1, env2; // env1 for filter/mod, env2 for amp
     juce::ADSR::Parameters env1Params, env2Params;
     float lastEnv1Value = 0.0f;
+    
+    // LFO S&H state
+    float lfo1LastPhase = 0.0f;
+    float lfo1LastSH = 0.0f;
+    float lfo2LastPhase = 0.0f;
+    float lfo2LastSH = 0.0f;
     
     // 3ms fade-in/out to prevent clicks at note-on/off
     int fadeInSamples = 0;
@@ -137,6 +195,7 @@ private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::Synthesiser synth;
+    std::shared_ptr<ParaphonicState> paraState;
 
     juce::dsp::Gain<float> masterGain;
 
@@ -147,6 +206,7 @@ private:
     // Hold mode state
     std::vector<int> physicallyHeldNotes;
     bool lastHoldState = false;
+    int lastVoiceMode = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Neon37AudioProcessor)
 };

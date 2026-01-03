@@ -11,27 +11,59 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    
+    void showParameterTooltip(const juce::String& text, juce::Component* source);
+    void hideParameterTooltip();
 
 private:
     Neon37AudioProcessor& audioProcessor;
     CustomLookAndFeel customLookAndFeel;
+    juce::TooltipWindow tooltipWindow{this, 700};
+    
+    // Parameter value tooltip display
+    juce::Label parameterValueTooltip;
+    juce::Component* lastActiveKnob = nullptr;
+    
+    class TooltipTimer : public juce::Timer
+    {
+    public:
+        std::function<void()> onTimeout;
+        void timerCallback() override {
+            if (onTimeout) onTimeout();
+            stopTimer();
+        }
+    };
+    TooltipTimer tooltipTimer;
 
     struct Knob : public juce::Component
     {
         juce::Slider slider;
         juce::Label label;
         bool isWaveKnob = false;
+        juce::RangedAudioParameter* parameter = nullptr;
+        Neon37AudioProcessorEditor* editor = nullptr;
 
         Knob(juce::String name, bool isWave = false) : isWaveKnob(isWave) {
             addAndMakeVisible(slider);
             slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
             slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
             
+            slider.onValueChange = [this] {
+                if (parameter && editor) {
+                    editor->showParameterTooltip(parameter->getCurrentValueAsText(), this);
+                }
+            };
+
             addAndMakeVisible(label);
             label.setText(name, juce::dontSendNotification);
             label.setFont(juce::Font(13.0f, juce::Font::bold));
             label.setJustificationType(juce::Justification::centred);
             label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.9f));
+        }
+
+        void setParameter(juce::RangedAudioParameter* p, Neon37AudioProcessorEditor* ed) {
+            parameter = p;
+            editor = ed;
         }
 
         void paint(juce::Graphics& g) override {
@@ -231,7 +263,7 @@ private:
     LED osc1Led, osc2Led;
     
     // Sidebar Buttons
-    SmallButton holdBtn{"HOLD"}, legatoBtn{"LEGATO"}, monoBtn{"MONO"}, paraBtn{"PARA"};
+    SmallButton holdBtn{"HOLD"}, monoLBtn{"MONO-L"}, monoBtn{"MONO"}, paraLBtn{"PARA-L"}, paraBtn{"PARA"}, polyBtn{"POLY"};
     
     // Oscillator Buttons
     SmallButton hardSyncBtn{"HARD SYNC"}, keySyncBtn{"KEY SYNC"};
@@ -332,7 +364,32 @@ private:
     std::unique_ptr<SliderAttachment> glissTimeAttach;
     std::unique_ptr<ButtonAttachment> glissRteAttach, glissTmeAttach, glissLogAttach, glissOnGatLegAttach;
     std::unique_ptr<ButtonAttachment> hardSyncAttach, keySyncAttach;
-    std::unique_ptr<ButtonAttachment> envExpCurvAttach, monoAttach, holdAttach, legatoAttach, paraAttach;
+    std::unique_ptr<ButtonAttachment> envExpCurvAttach, holdAttach;
+    
+    struct VoiceModeAttachment : public juce::AudioProcessorValueTreeState::Listener
+    {
+        Neon37AudioProcessorEditor& editor;
+        VoiceModeAttachment(Neon37AudioProcessorEditor& e) : editor(e) {
+            editor.audioProcessor.apvts.addParameterListener("voice_mode", this);
+            parameterChanged("voice_mode", *editor.audioProcessor.apvts.getRawParameterValue("voice_mode"));
+        }
+        ~VoiceModeAttachment() {
+            editor.audioProcessor.apvts.removeParameterListener("voice_mode", this);
+        }
+        void parameterChanged(const juce::String& parameterID, float newValue) override {
+            if (parameterID == "voice_mode") {
+                int mode = (int)newValue;
+                juce::MessageManager::callAsync([this, mode] {
+                    editor.monoLBtn.setToggleState(mode == 0, juce::dontSendNotification);
+                    editor.monoBtn.setToggleState(mode == 1, juce::dontSendNotification);
+                    editor.paraLBtn.setToggleState(mode == 2, juce::dontSendNotification);
+                    editor.paraBtn.setToggleState(mode == 3, juce::dontSendNotification);
+                    editor.polyBtn.setToggleState(mode == 4, juce::dontSendNotification);
+                });
+            }
+        }
+    };
+    std::unique_ptr<VoiceModeAttachment> voiceModeAttach;
 
     std::unique_ptr<SliderAttachment> lfo1RateAttach, lfo1WaveAttach, lfo1PitchAttach, lfo1FilterAttach, lfo1AmpAttach;
     std::unique_ptr<ButtonAttachment> lfo1SyncAttach;

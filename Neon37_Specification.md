@@ -151,3 +151,86 @@ graph LR
 - **Punch**: Fast envelopes and resonant filters create punchy bass and lead sounds.
 - **Smooth**: Analog-modeled oscillators with minimal aliasing.
 - **Versatile**: From deep bass to screaming leads to lush pads.
+
+## 7. Note Handling & Voice Architectures
+
+Neon-37 supports multiple play modes that map to two fundamentally different “keyboard → synth” architectures.
+
+### 7.1 Mono Architecture (Keybed-as-Potentiometer Model)
+
+This models early monosynth behavior (e.g., Minimoog-style):
+
+- **One pitch CV** at a time: the keybed behaves like a continuous resistive element, and the pressed key(s) define a single voltage.
+- **One gate**: gate is HIGH if *any* key is held; gate is LOW only when *no* keys are held.
+- **One trigger**: envelopes trigger on the gate rising edge (0 → 1), and do *not* retrigger while gate stays high.
+- **Oscillators always running**: in Mono-L the engine keeps one voice active and retunes it (no new note allocation on legato pitch changes). **Oscillator phase is NOT reset on legato notes, ensuring a continuous waveform.**
+
+Mono-L pitch priority is modeled as **lowest-note priority** (the pitch follows the lowest held key). Mono (retrigger) may use a different priority, but still remains a single-voice/gate system.
+
+### 7.2 Scanned Keyboard Architecture (Para / Poly)
+
+Modern keyboard scanning detects multiple simultaneous keys and produces discrete note-on/note-off events.
+
+- **Para (paraphonic)**: multiple oscillators/notes can be active simultaneously but share **one filter, one VCA, and one set of envelopes** (shared amp/filter contour). Envelopes are shared/gated by the aggregate key state. **In Para-L mode, oscillator phase IS reset on every note-on to ensure consistent attack transients for each voice in the chord.**
+- **Poly (polyphonic)**: each voice has its own oscillators, filter, VCA, and envelopes (one contour per voice). Notes are allocated to voices by the voice allocator.
+
+### 7.3 Architecture Diagram
+
+```mermaid
+flowchart LR
+    K[Keyboard Input]
+
+    subgraph MONO[Mono Family - Keybed Potentiometer]
+      MCV[Pitch CV - single]
+      MG[Gate - any key held]
+      MT[Trigger - gate rising]
+      MOV[One Voice - oscillators always running]
+      MENV[Shared Envelopes - filter and amp]
+      MF[Filter]
+      MA[Amp]
+      MOUT[Output]
+      MCV --> MOV --> MF --> MA --> MOUT
+      MG --> MENV
+      MT --> MENV
+      MENV -. contour .-> MF
+      MENV -. contour .-> MA
+    end
+
+    subgraph PARA[Paraphonic - Scanned Keyboard]
+      PN[Multiple note events]
+      POSC[Multiple oscillators or notes]
+      PENV[One shared envelope set]
+      PF[One shared filter]
+      PA[One shared amp]
+      POUT[Output]
+      PN --> POSC --> PF --> PA --> POUT
+      PN --> PENV
+      PENV -. contour .-> PF
+      PENV -. contour .-> PA
+    end
+
+    subgraph POLY[Polyphonic - Scanned Keyboard]
+      N[Note events]
+      VA[Voice allocator]
+      subgraph V1[Voice 1]
+        V1OSC[Oscs] --> V1F[Filter] --> V1A[Amp]
+        V1ENV[Env] -. contour .-> V1F
+        V1ENV -. contour .-> V1A
+      end
+      subgraph V2[Voice 2]
+        V2OSC[Oscs] --> V2F[Filter] --> V2A[Amp]
+        V2ENV[Env] -. contour .-> V2F
+        V2ENV[Env] -. contour .-> V2A
+      end
+      MIX[Voice mix] --> POUT2[Output]
+      N --> VA
+      VA --> V1OSC
+      VA --> V2OSC
+      V1A --> MIX
+      V2A --> MIX
+    end
+
+    K --> MONO
+    K --> PARA
+    K --> POLY
+```

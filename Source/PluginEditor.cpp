@@ -105,9 +105,11 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     masterSection.addAndMakeVisible(glissLogBtn);
     masterSection.addAndMakeVisible(glissOnGatLegBtn);
     masterSection.addAndMakeVisible(holdBtn);
-    masterSection.addAndMakeVisible(legatoBtn);
+    masterSection.addAndMakeVisible(monoLBtn);
     masterSection.addAndMakeVisible(monoBtn);
+    masterSection.addAndMakeVisible(paraLBtn);
     masterSection.addAndMakeVisible(paraBtn);
+    masterSection.addAndMakeVisible(polyBtn);
 
     oscillatorSection.addAndMakeVisible(hardSyncBtn);
     oscillatorSection.addAndMakeVisible(keySyncBtn);
@@ -130,42 +132,76 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     // Initialize APVTS Attachments
     auto& apvts = audioProcessor.apvts;
     
+    auto setupKnob = [&](Knob& knob, juce::String paramID) {
+        knob.setParameter(dynamic_cast<juce::RangedAudioParameter*>(apvts.getParameter(paramID)), this);
+    };
+
     masterVolAttach = std::make_unique<SliderAttachment>(apvts, "master_volume", masterVolume.slider);
+    setupKnob(masterVolume, "master_volume");
     masterFreqAttach = std::make_unique<SliderAttachment>(apvts, "master_freq", masterFreq.slider);
+    setupKnob(masterFreq, "master_freq");
     masterTuneAttach = std::make_unique<SliderAttachment>(apvts, "master_tune", masterTune.slider);
+    setupKnob(masterTune, "master_tune");
 
     osc1WaveAttach = std::make_unique<SliderAttachment>(apvts, "osc1_wave", osc1Wave.slider);
+    setupKnob(osc1Wave, "osc1_wave");
     osc1OctaveAttach = std::make_unique<SliderAttachment>(apvts, "osc1_octave", osc1Octave.slider);
+    setupKnob(osc1Octave, "osc1_octave");
     osc1SemitonesAttach = std::make_unique<SliderAttachment>(apvts, "osc1_semitones", osc1Semitones.slider);
+    setupKnob(osc1Semitones, "osc1_semitones");
     osc1FineAttach = std::make_unique<SliderAttachment>(apvts, "osc1_fine", osc1Fine.slider);
+    setupKnob(osc1Fine, "osc1_fine");
     osc2WaveAttach = std::make_unique<SliderAttachment>(apvts, "osc2_wave", osc2Wave.slider);
+    setupKnob(osc2Wave, "osc2_wave");
     osc2OctaveAttach = std::make_unique<SliderAttachment>(apvts, "osc2_octave", osc2Octave.slider);
+    setupKnob(osc2Octave, "osc2_octave");
     osc2SemitonesAttach = std::make_unique<SliderAttachment>(apvts, "osc2_semitones", osc2Semitones.slider);
+    setupKnob(osc2Semitones, "osc2_semitones");
     osc2FineAttach = std::make_unique<SliderAttachment>(apvts, "osc2_fine", osc2Fine.slider);
+    setupKnob(osc2Fine, "osc2_fine");
 
     mixOsc1Attach = std::make_unique<SliderAttachment>(apvts, "mixer_osc1", mixOsc1.slider);
+    setupKnob(mixOsc1, "mixer_osc1");
     mixSub1Attach = std::make_unique<SliderAttachment>(apvts, "mixer_sub1", mixSub1.slider);
+    setupKnob(mixSub1, "mixer_sub1");
     mixOsc2Attach = std::make_unique<SliderAttachment>(apvts, "mixer_osc2", mixOsc2.slider);
+    setupKnob(mixOsc2, "mixer_osc2");
     mixNoiseAttach = std::make_unique<SliderAttachment>(apvts, "mixer_noise", mixNoise.slider);
+    setupKnob(mixNoise, "mixer_noise");
     mixReturnAttach = std::make_unique<SliderAttachment>(apvts, "mixer_return", mixReturn.slider);
+    setupKnob(mixReturn, "mixer_return");
 
     cutoffAttach = std::make_unique<SliderAttachment>(apvts, "cutoff", filterCutoff.slider);
+    setupKnob(filterCutoff, "cutoff");
     resAttach = std::make_unique<SliderAttachment>(apvts, "resonance", filterRes.slider);
+    setupKnob(filterRes, "resonance");
     driveAttach = std::make_unique<SliderAttachment>(apvts, "drive", filterDrive.slider);
+    setupKnob(filterDrive, "drive");
     egDepthAttach = std::make_unique<SliderAttachment>(apvts, "eg_depth", filterEgDepth.slider);
+    setupKnob(filterEgDepth, "eg_depth");
     keyTrkAttach = std::make_unique<SliderAttachment>(apvts, "key_track", filterKeyTrk.slider);
+    setupKnob(filterKeyTrk, "key_track");
 
     fltAAttach = std::make_unique<SliderAttachment>(apvts, "env1_attack", fltA.slider);
+    setupKnob(fltA, "env1_attack");
     fltDAttach = std::make_unique<SliderAttachment>(apvts, "env1_decay", fltD.slider);
+    setupKnob(fltD, "env1_decay");
     fltSAttach = std::make_unique<SliderAttachment>(apvts, "env1_sustain", fltS.slider);
+    setupKnob(fltS, "env1_sustain");
     fltRAttach = std::make_unique<SliderAttachment>(apvts, "env1_release", fltR.slider);
+    setupKnob(fltR, "env1_release");
 
     ampAAttach = std::make_unique<SliderAttachment>(apvts, "env2_attack", ampA.slider);
+    setupKnob(ampA, "env2_attack");
     ampDAttach = std::make_unique<SliderAttachment>(apvts, "env2_decay", ampD.slider);
+    setupKnob(ampD, "env2_decay");
     ampSAttach = std::make_unique<SliderAttachment>(apvts, "env2_sustain", ampS.slider);
+    setupKnob(ampS, "env2_sustain");
     ampRAttach = std::make_unique<SliderAttachment>(apvts, "env2_release", ampR.slider);
+    setupKnob(ampR, "env2_release");
     
     glissTimeAttach = std::make_unique<SliderAttachment>(apvts, "gliss_time", glissTime.slider);
+    setupKnob(glissTime, "gliss_time");
     glissRteAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_rte", glissRteBtn);
     glissTmeAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_tme", glissTmeBtn);
     glissLogAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_log", glissLogBtn);
@@ -173,46 +209,109 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
 
     hardSyncAttach = std::make_unique<ButtonAttachment>(apvts, "hard_sync", hardSyncBtn);
     envExpCurvAttach = std::make_unique<ButtonAttachment>(apvts, "env_exp_curv", envExpCurvBtn);
-    monoAttach = std::make_unique<ButtonAttachment>(apvts, "mono_mode", monoBtn);
     holdAttach = std::make_unique<ButtonAttachment>(apvts, "hold_mode", holdBtn);
-    legatoAttach = std::make_unique<ButtonAttachment>(apvts, "legato_mode", legatoBtn);
-    paraAttach = std::make_unique<ButtonAttachment>(apvts, "para_mode", paraBtn);
+
+    auto setVoiceMode = [this](int mode) {
+        auto* param = audioProcessor.apvts.getParameter("voice_mode");
+        if (!param) return;
+        
+        float normalizedValue = param->getNormalisableRange().convertTo0to1((float)mode);
+        param->setValueNotifyingHost(normalizedValue);
+    };
+
+    monoLBtn.onClick = [this, setVoiceMode] { 
+        float currentMode = *audioProcessor.apvts.getRawParameterValue("voice_mode");
+        if ((int)currentMode == 0) { monoLBtn.setToggleState(true, juce::dontSendNotification); return; }
+        setVoiceMode(0); 
+    };
+    monoBtn.onClick = [this, setVoiceMode] { 
+        float currentMode = *audioProcessor.apvts.getRawParameterValue("voice_mode");
+        if ((int)currentMode == 1) { monoBtn.setToggleState(true, juce::dontSendNotification); return; }
+        setVoiceMode(1); 
+    };
+    paraLBtn.onClick = [this, setVoiceMode] { 
+        float currentMode = *audioProcessor.apvts.getRawParameterValue("voice_mode");
+        if ((int)currentMode == 2) { paraLBtn.setToggleState(true, juce::dontSendNotification); return; }
+        setVoiceMode(2); 
+    };
+    paraBtn.onClick = [this, setVoiceMode] { 
+        float currentMode = *audioProcessor.apvts.getRawParameterValue("voice_mode");
+        if ((int)currentMode == 3) { paraBtn.setToggleState(true, juce::dontSendNotification); return; }
+        setVoiceMode(3); 
+    };
+    polyBtn.onClick = [this, setVoiceMode] { 
+        float currentMode = *audioProcessor.apvts.getRawParameterValue("voice_mode");
+        if ((int)currentMode == 4) { polyBtn.setToggleState(true, juce::dontSendNotification); return; }
+        setVoiceMode(4); 
+    };
+
+    voiceModeAttach = std::make_unique<VoiceModeAttachment>(*this);
 
     // LFO 1 Attachments
     lfo1RateAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_rate", lfo1Rate.slider);
+    setupKnob(lfo1Rate, "lfo1_rate");
     lfo1WaveAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_wave", lfo1Wave.slider);
+    setupKnob(lfo1Wave, "lfo1_wave");
     lfo1SyncAttach = std::make_unique<ButtonAttachment>(apvts, "lfo1_sync", lfo1SyncBtn);
 
     // LFO 2 Attachments
     lfo2RateAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_rate", lfo2Rate.slider);
+    setupKnob(lfo2Rate, "lfo2_rate");
     lfo2WaveAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_wave", lfo2Wave.slider);
+    setupKnob(lfo2Wave, "lfo2_wave");
     lfo2SyncAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_sync", lfo2SyncBtn);
 
     lfo1PitchAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_pitch", lfo1Pitch.slider);
+    setupKnob(lfo1Pitch, "lfo1_pitch");
     lfo1FilterAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_filter", lfo1Filter.slider);
+    setupKnob(lfo1Filter, "lfo1_filter");
     lfo1AmpAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_amp", lfo1Amp.slider);
+    setupKnob(lfo1Amp, "lfo1_amp");
 
     lfo2PitchAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_pitch", lfo2Pitch.slider);
+    setupKnob(lfo2Pitch, "lfo2_pitch");
     lfo2FilterAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_filter", lfo2Filter.slider);
+    setupKnob(lfo2Filter, "lfo2_filter");
     lfo2AmpAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_amp", lfo2Amp.slider);
+    setupKnob(lfo2Amp, "lfo2_amp");
 
     velPitchAttach = std::make_unique<SliderAttachment>(apvts, "vel_pitch", velPitch.slider);
+    setupKnob(velPitch, "vel_pitch");
     velFilterAttach = std::make_unique<SliderAttachment>(apvts, "vel_filter", velFilter.slider);
+    setupKnob(velFilter, "vel_filter");
     velAmpAttach = std::make_unique<SliderAttachment>(apvts, "vel_amp", velAmp.slider);
+    setupKnob(velAmp, "vel_amp");
 
     atPitchAttach = std::make_unique<SliderAttachment>(apvts, "at_pitch", atPitch.slider);
+    setupKnob(atPitch, "at_pitch");
     atFilterAttach = std::make_unique<SliderAttachment>(apvts, "at_filter", atFilter.slider);
+    setupKnob(atFilter, "at_filter");
     atAmpAttach = std::make_unique<SliderAttachment>(apvts, "at_amp", atAmp.slider);
+    setupKnob(atAmp, "at_amp");
 
     pbPitchAttach = std::make_unique<SliderAttachment>(apvts, "pb_pitch", pbPitch.slider);
+    setupKnob(pbPitch, "pb_pitch");
     pbFilterAttach = std::make_unique<SliderAttachment>(apvts, "pb_filter", pbFilter.slider);
+    setupKnob(pbFilter, "pb_filter");
     pbAmpAttach = std::make_unique<SliderAttachment>(apvts, "pb_amp", pbAmp.slider);
+    setupKnob(pbAmp, "pb_amp");
 
     lfo1MwAttach = std::make_unique<ButtonAttachment>(apvts, "lfo1_mw", lfo1MwBtn);
     lfo2MwAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_mw", lfo2MwBtn);
     velMwAttach = std::make_unique<ButtonAttachment>(apvts, "vel_mw", velMwBtn);
     atMwAttach = std::make_unique<ButtonAttachment>(apvts, "at_mw", atMwBtn);
     pbMwAttach = std::make_unique<ButtonAttachment>(apvts, "pb_mw", pbMwBtn);
+    
+    // Setup parameter value tooltip
+    addAndMakeVisible(parameterValueTooltip);
+    parameterValueTooltip.setFont(juce::Font(16.0f, juce::Font::bold));
+    parameterValueTooltip.setJustificationType(juce::Justification::centred);
+    parameterValueTooltip.setColour(juce::Label::backgroundColourId, juce::Colours::black.withAlpha(0.8f));
+    parameterValueTooltip.setColour(juce::Label::textColourId, juce::Colours::white);
+    parameterValueTooltip.setColour(juce::Label::outlineColourId, juce::Colours::white.withAlpha(0.3f));
+    parameterValueTooltip.setVisible(false);
+    
+    tooltipTimer.onTimeout = [this] { hideParameterTooltip(); };
 
     setSize (1300, 750);
 }
@@ -226,6 +325,31 @@ void Neon37AudioProcessorEditor::paint (juce::Graphics& g)
 {
     // Subsequent 37 style background - blue-gray charcoal
     g.fillAll (juce::Colour(0xFF2B3A45));
+}
+
+void Neon37AudioProcessorEditor::showParameterTooltip(const juce::String& text, juce::Component* source)
+{
+    // If switching to a different parameter, immediately hide the old tooltip
+    if (lastActiveKnob != source && lastActiveKnob != nullptr)
+    {
+        hideParameterTooltip();
+    }
+    
+    lastActiveKnob = source;
+    parameterValueTooltip.setText(text, juce::dontSendNotification);
+    parameterValueTooltip.setVisible(true);
+    parameterValueTooltip.toFront(false);
+    
+    // Restart the 3-second timer
+    tooltipTimer.stopTimer();
+    tooltipTimer.startTimer(3000);
+}
+
+void Neon37AudioProcessorEditor::hideParameterTooltip()
+{
+    parameterValueTooltip.setVisible(false);
+    lastActiveKnob = nullptr;
+    tooltipTimer.stopTimer();
 }
 
 void Neon37AudioProcessorEditor::resized()
@@ -252,11 +376,13 @@ void Neon37AudioProcessorEditor::resized()
     glissLogBtn.setBounds(glissBtns.removeFromLeft(glissBtns.getWidth() / 2).reduced(2));
     glissOnGatLegBtn.setBounds(glissBtns.reduced(2));
     
-    auto sideBtns = sideContent.removeFromTop(120);
+    auto sideBtns = sideContent.removeFromTop(160);
     holdBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
-    legatoBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
+    monoLBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
     monoBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
+    paraLBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
     paraBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
+    polyBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
     
     logo.setBounds(masterSection.getLocalBounds().removeFromBottom(100));
     
@@ -400,4 +526,7 @@ void Neon37AudioProcessorEditor::resized()
     auto envBottomBtns = envArea.removeFromTop(30);
     envHoldOnBtn.setBounds(envBottomBtns.removeFromLeft(envBottomBtns.getWidth() / 2).reduced(15, 3));
     envExpCurvBtn.setBounds(envBottomBtns.reduced(15, 3));
+    
+    // Position parameter value tooltip at the top center of the window
+    parameterValueTooltip.setBounds(getWidth() / 2 - 150, 10, 300, 35);
 }
