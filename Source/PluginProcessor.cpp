@@ -401,29 +401,65 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
     }
     
-    // Update filter envelope parameters in real-time
-    juce::ADSR::Parameters filterEnvParams;
-    filterEnvParams.attack = apvts.getRawParameterValue("env1_attack")->load();
-    filterEnvParams.decay = apvts.getRawParameterValue("env1_decay")->load();
-    filterEnvParams.sustain = apvts.getRawParameterValue("env1_sustain")->load();
-    filterEnvParams.release = apvts.getRawParameterValue("env1_release")->load();
-    monoFilterEnv.setParameters(filterEnvParams);
+    // Update filter envelope parameters in real-time (only if changed)
+    float env1Attack = apvts.getRawParameterValue("env1_attack")->load();
+    float env1Decay = apvts.getRawParameterValue("env1_decay")->load();
+    float env1Sustain = apvts.getRawParameterValue("env1_sustain")->load();
+    float env1Release = apvts.getRawParameterValue("env1_release")->load();
     
-    // Update amplitude envelope parameters in real-time
-    juce::ADSR::Parameters ampEnvParams;
-    ampEnvParams.attack = apvts.getRawParameterValue("env2_attack")->load();
-    ampEnvParams.decay = apvts.getRawParameterValue("env2_decay")->load();
-    ampEnvParams.sustain = apvts.getRawParameterValue("env2_sustain")->load();
-    ampEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
-    monoAmpEnv.setParameters(ampEnvParams);
-    
-    // Update poly mode per-voice envelope parameters in real-time
-    if (voiceMode == 4)
+    if (env1Attack != cachedEnv1Attack || env1Decay != cachedEnv1Decay || 
+        env1Sustain != cachedEnv1Sustain || env1Release != cachedEnv1Release)
     {
-        for (int i = 0; i < MAX_VOICES; ++i)
+        cachedEnv1Attack = env1Attack;
+        cachedEnv1Decay = env1Decay;
+        cachedEnv1Sustain = env1Sustain;
+        cachedEnv1Release = env1Release;
+        
+        juce::ADSR::Parameters filterEnvParams;
+        filterEnvParams.attack = env1Attack;
+        filterEnvParams.decay = env1Decay;
+        filterEnvParams.sustain = env1Sustain;
+        filterEnvParams.release = env1Release;
+        monoFilterEnv.setParameters(filterEnvParams);
+        
+        // Update poly mode per-voice filter envelopes too
+        if (voiceMode == 4)
         {
-            voices[i].filterEnv.setParameters(filterEnvParams);
-            voices[i].ampEnv.setParameters(ampEnvParams);
+            for (int i = 0; i < MAX_VOICES; ++i)
+            {
+                voices[i].filterEnv.setParameters(filterEnvParams);
+            }
+        }
+    }
+    
+    // Update amplitude envelope parameters in real-time (only if changed)
+    float env2Attack = apvts.getRawParameterValue("env2_attack")->load();
+    float env2Decay = apvts.getRawParameterValue("env2_decay")->load();
+    float env2Sustain = apvts.getRawParameterValue("env2_sustain")->load();
+    float env2Release = apvts.getRawParameterValue("env2_release")->load();
+    
+    if (env2Attack != cachedEnv2Attack || env2Decay != cachedEnv2Decay || 
+        env2Sustain != cachedEnv2Sustain || env2Release != cachedEnv2Release)
+    {
+        cachedEnv2Attack = env2Attack;
+        cachedEnv2Decay = env2Decay;
+        cachedEnv2Sustain = env2Sustain;
+        cachedEnv2Release = env2Release;
+        
+        juce::ADSR::Parameters ampEnvParams;
+        ampEnvParams.attack = env2Attack;
+        ampEnvParams.decay = env2Decay;
+        ampEnvParams.sustain = env2Sustain;
+        ampEnvParams.release = env2Release;
+        monoAmpEnv.setParameters(ampEnvParams);
+        
+        // Update poly mode per-voice amp envelopes too
+        if (voiceMode == 4)
+        {
+            for (int i = 0; i < MAX_VOICES; ++i)
+            {
+                voices[i].ampEnv.setParameters(ampEnvParams);
+            }
         }
     }
     

@@ -90,6 +90,10 @@ private:
     juce::ADSR monoFilterEnv;
     juce::ADSR monoAmpEnv;
     
+    // Cache envelope parameters to avoid updating every block
+    float cachedEnv1Attack = 0.003f, cachedEnv1Decay = 0.05f, cachedEnv1Sustain = 1.0f, cachedEnv1Release = 0.05f;
+    float cachedEnv2Attack = 0.003f, cachedEnv2Decay = 0.05f, cachedEnv2Sustain = 1.0f, cachedEnv2Release = 0.05f;
+    
     double currentSampleRate = 44100.0;
     
     // Oscillator phase tracking - for MONO modes
