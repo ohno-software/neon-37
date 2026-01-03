@@ -46,7 +46,7 @@ jobs:
         Compress-Archive -Path artifacts/* -DestinationPath Neon37_Windows.zip
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: Neon37_Windows
         path: Neon37_Windows.zip
