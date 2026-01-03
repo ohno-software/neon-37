@@ -30,6 +30,10 @@ struct Neon37Voice
     // Oscillator phase tracking (independent per voice - free-running)
     float osc1Phase = 0.0f, osc2Phase = 0.0f, subOscPhase = 0.0f;
     
+    // For poly mode: Per-voice velocity and aftertouch tracking (independent per note)
+    float velocity = 0.0f;  // 0-1, from MIDI note-on velocity
+    float aftertouch = 0.0f;  // 0-1, from MIDI note aftertouch (per-note polyphonic aftertouch)
+    
     // For paraphonic modes: Amp gate for this voice (gates the oscillators on/off)
     // Independent of the shared monoAmpEnv envelope
     juce::ADSR ampGate;

@@ -223,13 +223,40 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (msg.isChannelPressure())
         {
             currentAftertouch = msg.getChannelPressureValue() / 127.0f;  // Normalize to 0-1
+            
+            // In poly mode, apply channel aftertouch to all active voices
+            if (voiceMode == 4)
+            {
+                for (int i = 0; i < MAX_VOICES; ++i)
+                {
+                    if (voices[i].active)
+                    {
+                        voices[i].aftertouch = currentAftertouch;
+                    }
+                }
+            }
             continue;
         }
         
         // Also track polyphonic aftertouch (per-note pressure)
         if (msg.isAftertouch())
         {
-            currentAftertouch = msg.getAfterTouchValue() / 127.0f;  // Normalize to 0-1
+            int aftertouchNote = msg.getNoteNumber();
+            float aftertouchValue = msg.getAfterTouchValue() / 127.0f;
+            currentAftertouch = aftertouchValue;  // Also update global for MONO/Paraphonic modes
+            
+            // In poly mode, apply aftertouch only to the specific note
+            if (voiceMode == 4)
+            {
+                for (int i = 0; i < MAX_VOICES; ++i)
+                {
+                    if (voices[i].active && voices[i].midiNote == aftertouchNote)
+                    {
+                        voices[i].aftertouch = aftertouchValue;
+                        break;
+                    }
+                }
+            }
             continue;
         }
         
@@ -310,6 +337,8 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 voices[voiceToAllocate].midiNote = midiNote;
                 voices[voiceToAllocate].active = true;
                 voices[voiceToAllocate].allocationTimestamp = ++voiceAllocationCounter;
+                voices[voiceToAllocate].velocity = currentVelocity;  // Store this note's velocity
+                voices[voiceToAllocate].aftertouch = 0.0f;  // Initialize aftertouch to 0
                 
                 // Trigger per-voice envelopes (always retrigger in poly mode, like MONO)
                 voices[voiceToAllocate].filterEnv.noteOn();
@@ -759,8 +788,20 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             {
                 float filterEnvValue = voices[voiceIdx].filterEnv.getNextSample();
                 
+                // === CALCULATE PER-VOICE FILTER MODULATION ===
+                float velFilterAmount = *apvts.getRawParameterValue("vel_filter");
+                float atFilterAmount = *apvts.getRawParameterValue("at_filter");
+                
+                // Calculate velocity and aftertouch modulation for this specific voice
+                float velFilterMod = velFilterAmount * voices[voiceIdx].velocity;
+                float atFilterMod = atFilterAmount * voices[voiceIdx].aftertouch;
+                
+                // Combine LFO + velocity + aftertouch for this voice's filter mod
+                float voiceTotalFilterMod = lfoFilterMod + velFilterMod + atFilterMod;
+                float voiceFilterModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, voiceTotalFilterMod);
+                
                 // Calculate and apply modulated cutoff
-                float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
+                float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, voiceFilterModMultiplier, resonance);
                 voices[voiceIdx].filter.setCutoffFrequencyHz(modulatedCutoff);
                 voices[voiceIdx].filter.setResonance(resonance);
                 voices[voiceIdx].filter.setDrive(drive);
@@ -777,8 +818,21 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
                 float ampEnvValue = voices[voiceIdx].ampEnv.getNextSample();
+                
+                // === CALCULATE PER-VOICE AMPLITUDE MODULATION ===
+                float velAmpAmount = *apvts.getRawParameterValue("vel_amp");
+                float atAmpAmount = *apvts.getRawParameterValue("at_amp");
+                
+                // Calculate velocity and aftertouch modulation for this specific voice
+                float velAmpMod = velAmpAmount * voices[voiceIdx].velocity;
+                float atAmpMod = atAmpAmount * voices[voiceIdx].aftertouch;
+                
+                // Combine LFO + velocity + aftertouch for this voice's amp mod
+                float voiceTotalAmpMod = lfoAmpMod + velAmpMod + atAmpMod;
+                float voiceAmpModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, voiceTotalAmpMod);
+                
                 // Apply all amplitude modulations (LFO, velocity, aftertouch)
-                ampEnvValue *= totalAmpModMultiplier;
+                ampEnvValue *= voiceAmpModMultiplier;
                 voiceAmpEnvBuffer.setSample(0, sample, ampEnvValue);
             }
             
