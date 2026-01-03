@@ -985,15 +985,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
 
     // Envelope 1 (Filter/Mod) - Exponential time range 3ms to 10s
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_attack", "Env 1 Attack", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.003f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_decay", "Env 1 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_decay", "Env 1 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_sustain", "Env 1 Sustain", 0.0f, 1.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_release", "Env 1 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_release", "Env 1 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
 
     // Envelope 2 (Amplitude) - Exponential time range 3ms to 10s
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_attack", "Env 2 Attack", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.003f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_decay", "Env 2 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_decay", "Env 2 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_sustain", "Env 2 Sustain", 0.0f, 1.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_release", "Env 2 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_release", "Env 2 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("env_exp_curv", "Exponential Envelopes", true));
 
     // Arpeggiator
