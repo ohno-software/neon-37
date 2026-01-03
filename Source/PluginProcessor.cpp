@@ -1,666 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-// --- Neon37Voice Implementation ---
-
-Neon37Voice::Neon37Voice()
-{
-    // Moog-style oscillator waveforms with anti-aliasing considerations
-    auto waveFunc = [this](float x, int& waveType) {
-        float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
-        phase = phase - std::floor(phase); // Normalize to 0-1
-        
-        switch (waveType) {
-            case 0: { // Triangle
-                float tri = 4.0f * std::abs(phase - 0.5f) - 1.0f;
-                return tri;
-            }
-            
-            case 1: { // Sawtooth
-                float saw = 2.0f * phase - 1.0f;
-                return saw;
-            }
-            
-            case 2: // Square - 50% duty cycle
-                return phase < 0.5f ? 1.0f : -1.0f;
-                
-            case 3: // 25% Pulse
-                return phase < 0.25f ? 1.0f : -1.0f;
-                
-            case 4: // 10% Pulse
-                return phase < 0.10f ? 1.0f : -1.0f;
-                
-            default:
-                return std::sin (x);
-        }
-    };
-
-    osc1.initialise ([this, waveFunc](float x) { return waveFunc(x, currentOsc1Wave); });
-    osc2.initialise ([this, waveFunc](float x) { return waveFunc(x, currentOsc2Wave); });
-    // Sub oscillator is always square wave, one octave below Osc1
-    sub1.initialise ([](float x) { 
-        float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
-        phase = phase - std::floor(phase);
-        return phase < 0.5f ? 1.0f : -1.0f;
-    });
-    // White noise generator
-    noise.initialise ([](float x) { 
-        juce::ignoreUnused(x); 
-        return juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
-    });
-
-    lfo1.initialise([this](float x) {
-        float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
-        phase = phase - std::floor(phase);
-        
-        float out = 0.0f;
-        switch (currentLfo1Wave) {
-            case 0: out = std::sin(x); break; // Sine
-            case 1: out = 2.0f * phase - 1.0f; break; // Saw Up
-            case 2: out = 1.0f - 2.0f * phase; break; // Saw Down
-            case 3: out = phase < 0.5f ? 1.0f : -1.0f; break; // Square
-            case 4: // S&H
-                if (phase < lfo1LastPhase) {
-                    lfo1LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
-                }
-                out = lfo1LastSH;
-                break;
-            default: out = std::sin(x); break;
-        }
-        lfo1LastPhase = phase;
-        return out;
-    });
-
-    lfo2.initialise([this](float x) {
-        float phase = (x + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi;
-        phase = phase - std::floor(phase);
-        
-        float out = 0.0f;
-        switch (currentLfo2Wave) {
-            case 0: out = std::sin(x); break; // Sine
-            case 1: out = 2.0f * phase - 1.0f; break; // Saw Up
-            case 2: out = 1.0f - 2.0f * phase; break; // Saw Down
-            case 3: out = phase < 0.5f ? 1.0f : -1.0f; break; // Square
-            case 4: // S&H
-                if (phase < lfo2LastPhase) {
-                    lfo2LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
-                }
-                out = lfo2LastSH;
-                break;
-            default: out = std::sin(x); break;
-        }
-        lfo2LastPhase = phase;
-        return out;
-    });
-}
-
-bool Neon37Voice::canPlaySound (juce::SynthesiserSound* sound)
-{
-    return dynamic_cast<Neon37Sound*> (sound) != nullptr;
-}
-
-void Neon37Voice::startNote (int midiNoteNumber, float velocity, juce::SynthesiserSound* sound, int currentPitchWheelPosition)
-{
-    juce::ignoreUnused (velocity, sound, currentPitchWheelPosition);
-    currentVelocity = velocity;
-    
-    // Set frequencies immediately with correct tuning to prevent glide
-    auto getOctaveMult = [](float choice) -> float {
-        int octave = (int)choice;
-        switch (octave) {
-            case 0: return 0.5f; // 16'
-            case 1: return 1.0f; // 8'
-            case 2: return 2.0f; // 4'
-            case 3: return 4.0f; // 2'
-            default: return 1.0f;
-        }
-    };
-    
-    float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
-    pitchOverrideMidiNote = midiNoteNumber;
-    baseOsc1Freq = baseFreq * getOctaveMult(currentOsc1Octave) * std::pow(2.0f, (currentOsc1Semitones + currentOsc1Fine) / 12.0f);
-    baseOsc2Freq = baseFreq * getOctaveMult(currentOsc2Octave) * std::pow(2.0f, (currentOsc2Semitones + currentOsc2Fine) / 12.0f);
-    baseSub1Freq = baseOsc1Freq * 0.5f;
-    
-    // Force immediate frequency changes, no smoothing
-    osc1.setFrequency (baseOsc1Freq, true);
-    osc2.setFrequency (baseOsc2Freq, true);
-    sub1.setFrequency (baseSub1Freq, true);
-    
-    // Reset oscillators only for NEW voices (not currently playing)
-    // For Para-L: each new note in the chord gets a fresh voice, so reset it
-    // For Mono-L: legato notes reuse the same voice without calling startNote,
-    // so this only resets on the very first note
-    if (!isVoiceActive())
-    {
-        osc1.reset();
-        osc2.reset();
-        sub1.reset();
-    }
-    
-    // Start envelopes
-    bool isLegato = (currentVoiceMode == 0 || currentVoiceMode == 2);
-    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
-    
-    // Reset filter to prevent clicks from previous state
-    // Only reset filter for Poly mode or first note in Para/Mono modes
-    // For legato modes, check paraState activeNotes rather than voice count
-    // because mono mode kills/restarts voices which resets voice count to 0
-    bool shouldResetFilter = false;
-    if (!isParaOrMono)
-    {
-        shouldResetFilter = true; // Poly mode always resets
-    }
-    else if (isLegato && paraState)
-    {
-        // For legato modes, only reset if no notes are currently held
-        shouldResetFilter = (paraState->activeNotes == 0);
-    }
-    else if (paraState)
-    {
-        // For non-legato Para/Mono modes, reset on first note
-        shouldResetFilter = (paraState->activeNotes == 0);
-    }
-    
-    if (shouldResetFilter)
-    {
-        // Calculate initial filter cutoff to avoid "wah" at start
-        // If attack is 0, we want to start at the "open" position.
-        // If attack > 0, we start at the "closed" position.
-        float initialEnv1 = (env1Params.attack <= 0.001f) ? 1.0f : 0.0f;
-        if (useExpEnv) initialEnv1 *= initialEnv1;
-        
-        float initialCutoff = currentFilterCutoff * std::pow(2.0f, (initialEnv1 * currentFilterEgDepth));
-        initialCutoff = juce::jlimit(20.0f, 20000.0f, initialCutoff);
-        voiceFilter.setCutoffFrequencyHz(initialCutoff);
-        voiceFilter.reset();
-    }
-    
-    fadeOutCounter = -1; // Reset fade-out
-    
-    if (isParaOrMono)
-    {
-        // Envelopes are handled by the processor for Para/Mono modes
-        // Ensure per-voice envelopes are completely off
-        env1.reset();
-        env2.reset();
-        // Para-L needs a small fade to prevent pops when notes are added to the chord
-        bool isParaL = (currentVoiceMode == 2);
-        fadeInCounter = isParaL ? 0 : -1;
-    }
-    else if (isLegato && activeVoiceCount > 0)
-    {
-        // Legato: only start if not already active
-        if (!env2.isActive())
-        {
-            env1.reset();
-            env2.reset();
-            env1.noteOn();
-            env2.noteOn();
-            fadeInCounter = 0;
-        }
-        // If already active, we don't reset fadeInCounter to 0 to avoid a dip
-    }
-    else
-    {
-        // Normal or first note: retrigger
-        env1.reset();
-        env2.reset();
-        env1.noteOn();
-        env2.noteOn();
-        fadeInCounter = 0;
-    }
-}
-
-void Neon37Voice::retuneToMidiNote (int midiNoteNumber)
-{
-    // Retune without restarting envelopes/filters/osc phase.
-    auto getOctaveMult = [](float choice) -> float {
-        int octave = (int)choice;
-        switch (octave) {
-            case 0: return 0.5f; // 16'
-            case 1: return 1.0f; // 8'
-            case 2: return 2.0f; // 4'
-            case 3: return 4.0f; // 2'
-            default: return 1.0f;
-        }
-    };
-
-    pitchOverrideMidiNote = midiNoteNumber;
-    float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
-    baseOsc1Freq = baseFreq * getOctaveMult(currentOsc1Octave) * std::pow(2.0f, (currentOsc1Semitones + currentOsc1Fine) / 12.0f);
-    baseOsc2Freq = baseFreq * getOctaveMult(currentOsc2Octave) * std::pow(2.0f, (currentOsc2Semitones + currentOsc2Fine) / 12.0f);
-    baseSub1Freq = baseOsc1Freq * 0.5f;
-
-    osc1.setFrequency (baseOsc1Freq, true);
-    osc2.setFrequency (baseOsc2Freq, true);
-    sub1.setFrequency (baseSub1Freq, true);
-}
-
-void Neon37Voice::stopNote (float velocity, bool allowTailOff)
-{
-    juce::ignoreUnused (velocity);
-
-    pitchOverrideMidiNote = -1;
-    
-    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
-    if (!isParaOrMono)
-    {
-        env1.noteOff();
-        env2.noteOff();
-    }
-    
-    if (!allowTailOff)
-    {
-        clearCurrentNote();
-    }
-    else
-    {
-        // Poly mode uses fade-out for voice management
-        // Para modes also need fade-out to prevent pops when individual notes are released
-        bool isParaL = (currentVoiceMode == 2);
-        bool isPara = (currentVoiceMode == 3);
-        
-        if (!isParaOrMono || isParaL || isPara)
-        {
-            // For Para modes, only fade out if other notes are still held.
-            // If it's the last note, let it follow the shared envelope release.
-            if ((isParaL || isPara) && paraState && paraState->activeNotes == 0)
-            {
-                // Last note, don't fade out here, let shared envelope handle it
-            }
-            else
-            {
-                fadeOutCounter = 0;
-            }
-        }
-    }
-}
-
-void Neon37Voice::pitchWheelMoved (int newPitchWheelValue) 
-{ 
-    currentPitchBend = (newPitchWheelValue - 8192) / 8192.0f;
-}
-
-void Neon37Voice::controllerMoved (int controllerNumber, int newControllerValue) 
-{ 
-    if (controllerNumber == 1)
-        currentModWheel = newControllerValue / 127.0f;
-}
-
-void Neon37Voice::prepareToPlay (double sampleRate, int samplesPerBlock, int outputChannels)
-{
-    juce::dsp::ProcessSpec spec;
-    spec.sampleRate = sampleRate;
-    spec.maximumBlockSize = samplesPerBlock;
-    spec.numChannels = outputChannels;
-
-    osc1.prepare (spec);
-    osc2.prepare (spec);
-    sub1.prepare (spec);
-    noise.prepare (spec);
-    lfo1.prepare (spec);
-    lfo2.prepare (spec);
-    
-    osc1Gain.prepare (spec);
-    osc2Gain.prepare (spec);
-    sub1Gain.prepare (spec);
-    noiseGain.prepare (spec);
-    
-    voiceFilter.prepare (spec);
-    voiceFilter.setMode (juce::dsp::LadderFilterMode::LPF24);
-    voiceFilter.setEnabled (true);
-    voiceFilter.reset();
-
-    env1.setSampleRate (sampleRate);
-    env2.setSampleRate (sampleRate);
-    
-    lfo1LastPhase = 0.0f;
-    lfo1LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
-    lfo2LastPhase = 0.0f;
-    lfo2LastSH = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
-
-    // Negate all default smoothing/ramping for maximum snappiness
-    osc1Gain.setRampDurationSeconds (0.0);
-    osc2Gain.setRampDurationSeconds (0.0);
-    sub1Gain.setRampDurationSeconds (0.0);
-    noiseGain.setRampDurationSeconds (0.0);
-
-    currentSampleRate = sampleRate;
-    fadeInSamples = (int)(0.004 * sampleRate);   // 4ms fade-in for Para-L
-    fadeOutSamples = (int)(0.010 * sampleRate);  // 10ms fade-out for Para-L and Poly
-
-    synthBuffer.setSize (outputChannels, samplesPerBlock);
-    isPrepared = true;
-}
-
-void Neon37Voice::retriggerEnvelopes()
-{
-    env1.reset();
-    env2.reset();
-    env1.noteOn();
-    env2.noteOn();
-    voiceFilter.reset();
-    fadeInCounter = 0;
-}
-
-void Neon37Voice::startEnvelopesWithoutRetrigger()
-{
-    // If already active, don't do anything. 
-    // If not active (e.g. new voice in para mode), we should ideally 
-    // jump to the current sustain level, but ADSR doesn't support that easily.
-    // For now, we'll just start it normally but the user's request 
-    // implies that subsequent notes in Para+Legato don't retrigger.
-    if (!env2.isActive())
-    {
-        env1.noteOn();
-        env2.noteOn();
-        fadeInCounter = 0;
-    }
-}
-
-void Neon37Voice::updateParameters (float osc1Wave, float osc1Octave, float osc1Semitones, float osc1Fine,
-                                   float osc2Wave, float osc2Octave, float osc2Semitones, float osc2Fine,
-                                   float env1A, float env1D, float env1S, float env1R,
-                                   float env2A, float env2D, float env2S, float env2R,
-                                   float mixerOsc1, float mixerOsc2, float mixerSub1, float mixerNoise,
-                                   float filterCutoff, float filterResonance, float filterDrive, float filterEgDepth,
-                                   bool expEnv,
-                                   float lfo1Rate, bool lfo1Sync, int lfo1Wave, float lfo1Pitch, float lfo1Filter, float lfo1Amp,
-                                   float lfo2Rate, bool lfo2Sync, int lfo2Wave, float lfo2Pitch, float lfo2Filter, float lfo2Amp,
-                                   float velPitch, float velFilter, float velAmp,
-                                   float atPitch, float atFilter, float atAmp,
-                                   float pbPitch, float pbFilter, float pbAmp,
-                                   bool lfo1Mw, bool lfo2Mw, bool velMw, bool atMw, bool pbMw,
-                                   int voiceMode, int numActiveVoices)
-{
-    juce::ignoreUnused(lfo1Sync, lfo2Sync);
-    currentOsc1Wave = (int)osc1Wave;
-    currentOsc2Wave = (int)osc2Wave;
-    currentLfo1Wave = lfo1Wave;
-    currentLfo2Wave = lfo2Wave;
-    
-    // Store oscillator tuning for use in startNote
-    currentOsc1Octave = osc1Octave;
-    currentOsc1Semitones = osc1Semitones;
-    currentOsc1Fine = osc1Fine;
-    currentOsc2Octave = osc2Octave;
-    currentOsc2Semitones = osc2Semitones;
-    currentOsc2Fine = osc2Fine;
-    
-    // Store filter parameters for use during rendering
-    currentFilterCutoff = filterCutoff;
-    currentFilterResonance = filterResonance;
-    currentFilterDrive = filterDrive;
-    currentFilterEgDepth = filterEgDepth;
-    useExpEnv = expEnv;
-
-    // Store mod parameters
-    modLfo1Pitch = 12.0f * (std::pow(2.0f, lfo1Pitch) - 1.0f); 
-    modLfo1Filter = lfo1Filter; 
-    modLfo1Amp = lfo1Amp;
-    
-    modLfo2Pitch = 12.0f * (std::pow(2.0f, lfo2Pitch) - 1.0f); 
-    modLfo2Filter = lfo2Filter; 
-    modLfo2Amp = lfo2Amp;
-    
-    // Velocity and Aftertouch need proper scaling for filter modulation
-    modVelPitch = velPitch; 
-    modVelFilter = velFilter * 4.0f;  // Scale to match LFO range
-    modVelAmp = velAmp;
-    
-    modAtPitch = atPitch; 
-    modAtFilter = atFilter * 4.0f;    // Scale to match LFO range
-    modAtAmp = atAmp;
-    
-    modPbPitch = pbPitch; 
-    modPbFilter = pbFilter * 5.0f;    // Scale to match LFO range
-    modPbAmp = pbAmp;
-    
-    modLfo1Mw = lfo1Mw;
-    modLfo2Mw = lfo2Mw;
-    modVelMw = velMw;
-    modAtMw = atMw;
-    modPbMw = pbMw;
-
-    currentVoiceMode = voiceMode;
-    activeVoiceCount = numActiveVoices;
-
-    lfo1.setFrequency(lfo1Rate);
-    lfo2.setFrequency(lfo2Rate);
-    
-    auto getOctaveMult = [](int choice) -> float {
-        switch (choice) {
-            case 0: return 0.5f; // 16'
-            case 1: return 1.0f; // 8'
-            case 2: return 2.0f; // 4'
-            case 3: return 4.0f; // 2'
-            default: return 1.0f;
-        }
-    };
-    
-    if (isVoiceActive())
-    {
-        const int noteForPitch = (pitchOverrideMidiNote >= 0) ? pitchOverrideMidiNote : getCurrentlyPlayingNote();
-        float baseFreq = (float)juce::MidiMessage::getMidiNoteInHertz (noteForPitch);
-        // Apply octave, semitones, and fine tuning (fine is in semitones/cents)
-        baseOsc1Freq = baseFreq * getOctaveMult((int)osc1Octave) * std::pow(2.0f, (osc1Semitones + osc1Fine) / 12.0f);
-        baseOsc2Freq = baseFreq * getOctaveMult((int)osc2Octave) * std::pow(2.0f, (osc2Semitones + osc2Fine) / 12.0f);
-        baseSub1Freq = baseOsc1Freq * 0.5f;
-        
-        osc1.setFrequency (baseOsc1Freq);
-        osc2.setFrequency (baseOsc2Freq);
-        sub1.setFrequency (baseSub1Freq);
-    }
-
-    env1Params.attack = env1A;
-    env1Params.decay = env1D;
-    env1Params.sustain = env1S;
-    env1Params.release = env1R;
-    env1.setParameters (env1Params);
-
-    env2Params.attack = env2A;
-    env2Params.decay = env2D;
-    env2Params.sustain = env2S;
-    env2Params.release = env2R;
-    env2.setParameters (env2Params);
-
-    osc1Gain.setGainDecibels (mixerOsc1);
-    osc2Gain.setGainDecibels (mixerOsc2);
-    sub1Gain.setGainDecibels (mixerSub1);
-    noiseGain.setGainDecibels (mixerNoise);
-}
-
-void Neon37Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples)
-{
-    bool isParaOrMono = (currentVoiceMode >= 0 && currentVoiceMode <= 3);
-    
-    // Check if voice should render
-    if (!isPrepared)
-        return;
-    
-    if (isParaOrMono)
-    {
-        // For Para/Mono modes, check if voice is playing a note
-        if (!isVoiceActive())
-            return;
-    }
-    else
-    {
-        // For Poly mode, check per-voice envelope
-        if (!env2.isActive())
-            return;
-    }
-
-    synthBuffer.clear();
-    
-    const int subBlockSize = 16;
-    int samplesRemaining = numSamples;
-    int currentStartSample = 0;
-
-    while (samplesRemaining > 0)
-    {
-        int numThisTime = std::min (subBlockSize, samplesRemaining);
-        
-        // Get modulation values at the start of this sub-block for the filter
-        float currentEnv1 = 0.0f;
-        if (isParaOrMono && paraState)
-            currentEnv1 = paraState->env1Buffer.getSample(0, currentStartSample);
-        else
-        {
-            currentEnv1 = env1.getNextSample();
-            if (useExpEnv) currentEnv1 = currentEnv1 * currentEnv1;
-        }
-        lastEnv1Value = currentEnv1;
-
-        float lfo1ValStart = lfo1.processSample(0.0f);
-        float lfo2ValStart = lfo2.processSample(0.0f);
-        
-        float mwLfo1 = modLfo1Mw ? currentModWheel : 1.0f;
-        float mwLfo2 = modLfo2Mw ? currentModWheel : 1.0f;
-        float mwVel = modVelMw ? currentModWheel : 1.0f;
-        float mwAt = modAtMw ? currentModWheel : 1.0f;
-        float mwPb = modPbMw ? currentModWheel : 1.0f;
-
-        float modFilterStart = (lfo1ValStart * modLfo1Filter * mwLfo1 * 5.0f) + 
-                               (lfo2ValStart * modLfo2Filter * mwLfo2 * 5.0f) + 
-                               (currentVelocity * modVelFilter * mwVel) + 
-                               (currentAftertouch * modAtFilter * mwAt) +
-                               (currentPitchBend * modPbFilter * mwPb);
-
-        float modulatedCutoff = currentFilterCutoff * std::pow(2.0f, (currentEnv1 * currentFilterEgDepth) + modFilterStart);
-        modulatedCutoff = juce::jlimit(20.0f, 20000.0f, modulatedCutoff);
-        
-        voiceFilter.setCutoffFrequencyHz(modulatedCutoff);
-        voiceFilter.setResonance(currentFilterResonance);
-        voiceFilter.setDrive(currentFilterDrive);
-
-        // 1. Render oscillators for this sub-block
-        for (int s = 0; s < numThisTime; ++s) {
-            int bufferIdx = currentStartSample + s;
-            
-            // Advance env1 per sample to keep it in sync, even if we only used the start value for the filter
-            if (s > 0 && !isParaOrMono) {
-                float e1 = env1.getNextSample();
-                if (useExpEnv) e1 = e1 * e1;
-                lastEnv1Value = e1;
-            }
-
-            // For the first sample of the sub-block, we use the values we already calculated
-            float lfo1Val = (s == 0) ? lfo1ValStart : lfo1.processSample(0.0f);
-            float lfo2Val = (s == 0) ? lfo2ValStart : lfo2.processSample(0.0f);
-            
-            // Pitch bend quantized to semitones
-            float pbPitchOffset = std::round(currentPitchBend * modPbPitch);
-
-            float modPitch = (lfo1Val * modLfo1Pitch * mwLfo1) + (lfo2Val * modLfo2Pitch * mwLfo2) + 
-                             (currentVelocity * modVelPitch * mwVel) + (currentAftertouch * modAtPitch * mwAt) +
-                             (pbPitchOffset * mwPb);
-
-            float pitchMult = std::pow(2.0f, modPitch / 12.0f);
-            osc1.setFrequency(baseOsc1Freq * pitchMult);
-            osc2.setFrequency(baseOsc2Freq * pitchMult);
-            sub1.setFrequency(baseSub1Freq * pitchMult);
-
-            float val = 0.0f;
-            val += osc1Gain.processSample(osc1.processSample(0.0f));
-            val += osc2Gain.processSample(osc2.processSample(0.0f));
-            val += sub1Gain.processSample(sub1.processSample(0.0f));
-            val += noiseGain.processSample(noise.processSample(0.0f));
-
-            for (int c = 0; c < synthBuffer.getNumChannels(); ++c)
-                synthBuffer.setSample(c, bufferIdx, val);
-        }
-
-        // 2. Process filter for this sub-block
-        auto subBlock = juce::dsp::AudioBlock<float> (synthBuffer).getSubBlock((size_t)currentStartSample, (size_t)numThisTime);
-        
-        if (currentFilterDrive > 1.0f)
-            subBlock.multiplyBy(1.0f + (currentFilterDrive - 1.0f) * 0.15f);
-
-        juce::dsp::ProcessContextReplacing<float> context (subBlock);
-        voiceFilter.process(context);
-        
-        // 3. Apply amplitude envelope for this sub-block
-        for (int s = 0; s < numThisTime; ++s) {
-            int bufferIdx = currentStartSample + s;
-            
-            float env2Val = 0.0f;
-            if (isParaOrMono && paraState)
-                env2Val = paraState->env2Buffer.getSample(0, bufferIdx);
-            else
-            {
-                env2Val = env2.getNextSample();
-                if (useExpEnv) env2Val = env2Val * env2Val;
-            }
-            
-            // To keep it simple and fast, we'll use the start value for modAmp in this sub-block
-            // since amp smoothing is less noticeable than filter smoothing.
-            float modAmpStart = (lfo1ValStart * modLfo1Amp * mwLfo1) + (lfo2ValStart * modLfo2Amp * mwLfo2) + 
-                                (currentVelocity * modVelAmp * mwVel) + (currentAftertouch * modAtAmp * mwAt) +
-                                (currentPitchBend * modPbAmp * mwPb);
-            
-            float modAmpGain = juce::jlimit(0.0f, 1.0f, 1.0f + modAmpStart);
-
-            float fadeGain = 1.0f;
-            if (fadeInCounter >= 0 && fadeInCounter < fadeInSamples) {
-                fadeGain *= (float)fadeInCounter / (float)fadeInSamples;
-                fadeInCounter++;
-            }
-            
-            if (fadeOutCounter >= 0) {
-                float fadeOutGain = 1.0f - ((float)fadeOutCounter / (float)fadeOutSamples);
-                fadeGain *= juce::jmax(0.0f, fadeOutGain);
-                fadeOutCounter++;
-            }
-            
-            for (int c = 0; c < synthBuffer.getNumChannels(); ++c) {
-                float sample = synthBuffer.getSample(c, bufferIdx) * env2Val * modAmpGain * fadeGain;
-                synthBuffer.setSample(c, bufferIdx, sample);
-            }
-        }
-
-        currentStartSample += numThisTime;
-        samplesRemaining -= numThisTime;
-    }
-
-    for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
-    {
-        outputBuffer.addFrom (channel, startSample, synthBuffer, channel, 0, numSamples);
-    }
-
-    // Clear voice if fade-out complete or envelope finished
-    if (isParaOrMono)
-    {
-        // Para modes need to wait for BOTH fade-out AND shared envelope release
-        bool isParaL = (currentVoiceMode == 2);
-        bool isPara = (currentVoiceMode == 3);
-        
-        if (isParaL || isPara)
-        {
-            // For Para: wait for fade to complete OR shared envelope to finish
-            bool fadeComplete = (fadeOutCounter >= fadeOutSamples && fadeOutCounter != -1);
-            bool envelopeFinished = (paraState && paraState->activeNotes == 0 && !paraState->env2.isActive());
-            
-            if (fadeComplete || envelopeFinished)
-                clearCurrentNote();
-        }
-        else
-        {
-            // For Mono modes: keep rendering through the shared release tail
-            if (paraState && paraState->activeNotes == 0 && !paraState->env2.isActive())
-                clearCurrentNote();
-        }
-    }
-    else
-    {
-        if ((fadeOutCounter >= fadeOutSamples) || !env2.isActive())
-            clearCurrentNote();
-    }
-}
-
-// --- Neon37AudioProcessor Implementation ---
-
 Neon37AudioProcessor::Neon37AudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
@@ -676,14 +16,6 @@ Neon37AudioProcessor::Neon37AudioProcessor()
 #endif
     apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
-    paraState = std::make_shared<ParaphonicState>();
-    for (int i = 0; i < 8; ++i) {
-        auto* v = new Neon37Voice();
-        v->setParaState(paraState);
-        synth.addVoice (v);
-    }
-    
-    synth.addSound (new Neon37Sound());
 }
 
 Neon37AudioProcessor::~Neon37AudioProcessor()
@@ -692,7 +24,7 @@ Neon37AudioProcessor::~Neon37AudioProcessor()
 
 const juce::String Neon37AudioProcessor::getName() const
 {
-    return "Neon37";
+    return "Neon37-r";
 }
 
 bool Neon37AudioProcessor::acceptsMidi() const
@@ -755,22 +87,89 @@ void Neon37AudioProcessor::changeProgramName (int index, const juce::String& new
 
 void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    synth.setCurrentPlaybackSampleRate (sampleRate);
-    paraState->prepare(sampleRate, samplesPerBlock);
+    currentSampleRate = sampleRate;
     
-    for (int i = 0; i < synth.getNumVoices(); ++i)
-    {
-        if (auto voice = dynamic_cast<Neon37Voice*> (synth.getVoice (i)))
-            voice->prepareToPlay (sampleRate, samplesPerBlock, getTotalNumOutputChannels());
-    }
-
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
     spec.maximumBlockSize = samplesPerBlock;
     spec.numChannels = getTotalNumOutputChannels();
     
-    masterGain.prepare (spec);
-    masterGain.setRampDurationSeconds (0.0);
+    // Initialize MONO filter
+    monoFilter.prepare(spec);
+    monoFilter.setMode(juce::dsp::LadderFilterMode::LPF24);
+    monoFilter.setEnabled(true);
+    
+    // Set filter to match APVTS values and reset to avoid startup transients
+    float cutoff = apvts.getRawParameterValue("cutoff")->load();
+    float resonance = apvts.getRawParameterValue("resonance")->load();
+    monoFilter.setCutoffFrequencyHz(cutoff);
+    monoFilter.setResonance(resonance);
+    monoFilter.reset();
+    
+    // Initialize MONO filter envelope
+    monoFilterEnv.setSampleRate(sampleRate);
+    juce::ADSR::Parameters monoFilterEnvParams;
+    monoFilterEnvParams.attack = apvts.getRawParameterValue("env1_attack")->load();
+    monoFilterEnvParams.decay = apvts.getRawParameterValue("env1_decay")->load();
+    monoFilterEnvParams.sustain = apvts.getRawParameterValue("env1_sustain")->load();
+    monoFilterEnvParams.release = apvts.getRawParameterValue("env1_release")->load();
+    monoFilterEnv.setParameters(monoFilterEnvParams);
+    
+    // Initialize MONO amplitude envelope
+    monoAmpEnv.setSampleRate(sampleRate);
+    juce::ADSR::Parameters monoAmpEnvParams;
+    monoAmpEnvParams.attack = apvts.getRawParameterValue("env2_attack")->load();
+    monoAmpEnvParams.decay = apvts.getRawParameterValue("env2_decay")->load();
+    monoAmpEnvParams.sustain = apvts.getRawParameterValue("env2_sustain")->load();
+    monoAmpEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
+    monoAmpEnv.setParameters(monoAmpEnvParams);
+    
+    // Initialize paraphonic voices
+    for (int i = 0; i < MAX_VOICES; ++i)
+    {
+        // Amp gate: gates the oscillators on/off for click-free operation (paraphonic modes only)
+        // Separate from the shared monoAmpEnv envelope
+        voices[i].ampGate.setSampleRate(sampleRate);
+        juce::ADSR::Parameters gateParams;
+        gateParams.attack = 0.003f;   // 3ms attack (prevents clicks on note-on)
+        gateParams.decay = 0.0f;
+        gateParams.sustain = 1.0f;
+        gateParams.release = 0.010f;  // 10ms release (lets ADSR release envelope breathe)
+        voices[i].ampGate.setParameters(gateParams);
+        
+        // Per-voice filter (poly mode)
+        voices[i].filter.prepare(spec);
+        voices[i].filter.setMode(juce::dsp::LadderFilterMode::LPF24);
+        voices[i].filter.setEnabled(true);
+        voices[i].filter.setCutoffFrequencyHz(cutoff);
+        voices[i].filter.setResonance(resonance);
+        voices[i].filter.reset();
+        
+        // Per-voice filter envelope (poly mode)
+        voices[i].filterEnv.setSampleRate(sampleRate);
+        juce::ADSR::Parameters polyFilterEnvParams;
+        polyFilterEnvParams.attack = apvts.getRawParameterValue("env1_attack")->load();
+        polyFilterEnvParams.decay = apvts.getRawParameterValue("env1_decay")->load();
+        polyFilterEnvParams.sustain = apvts.getRawParameterValue("env1_sustain")->load();
+        polyFilterEnvParams.release = apvts.getRawParameterValue("env1_release")->load();
+        voices[i].filterEnv.setParameters(polyFilterEnvParams);
+        
+        // Per-voice amp envelope (poly mode)
+        voices[i].ampEnv.setSampleRate(sampleRate);
+        juce::ADSR::Parameters polyAmpEnvParams;
+        polyAmpEnvParams.attack = apvts.getRawParameterValue("env2_attack")->load();
+        polyAmpEnvParams.decay = apvts.getRawParameterValue("env2_decay")->load();
+        polyAmpEnvParams.sustain = apvts.getRawParameterValue("env2_sustain")->load();
+        polyAmpEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
+        voices[i].ampEnv.setParameters(polyAmpEnvParams);
+        
+        // Voice output buffer
+        voices[i].voiceBuffer.setSize(getTotalNumOutputChannels(), samplesPerBlock);
+    }
+    
+    // Initialize output gain to unity
+    outputGain.prepare(spec);
+    outputGain.setGainLinear(1.0f);
 }
 
 void Neon37AudioProcessor::releaseResources()
@@ -799,398 +198,672 @@ bool Neon37AudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
 void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-
-    int voiceMode = (int)*apvts.getRawParameterValue("voice_mode");
-    bool monoMode = (voiceMode == 0 || voiceMode == 1);
-    bool paraMode = (voiceMode == 2 || voiceMode == 3);
-    bool holdMode = *apvts.getRawParameterValue("hold_mode") > 0.5f;
-    bool expEnv = *apvts.getRawParameterValue("env_exp_curv") > 0.5f;
     
-    // Panic on mode change
-    if (voiceMode != lastVoiceMode)
-    {
-        for (int i = 0; i < synth.getNumVoices(); ++i)
-            synth.getVoice(i)->stopNote(0.0f, false);
-        heldNotes.clear();
-        physicallyHeldNotes.clear();
-        currentPlayingNote = -1;
-        paraState->activeNotes = 0;
-        paraState->env1.reset();
-        paraState->env2.reset();
-        lastVoiceMode = voiceMode;
-    }
-
-    // Update Paraphonic State Envelopes
-    juce::ADSR::Parameters p1, p2;
-    p1.attack = *apvts.getRawParameterValue("env1_attack");
-    p1.decay = *apvts.getRawParameterValue("env1_decay");
-    p1.sustain = *apvts.getRawParameterValue("env1_sustain");
-    p1.release = *apvts.getRawParameterValue("env1_release");
-    p2.attack = *apvts.getRawParameterValue("env2_attack");
-    p2.decay = *apvts.getRawParameterValue("env2_decay");
-    p2.sustain = *apvts.getRawParameterValue("env2_sustain");
-    p2.release = *apvts.getRawParameterValue("env2_release");
-    paraState->env1.setParameters(p1);
-    paraState->env2.setParameters(p2);
-
-    // Handle Hold Mode transition (OFF -> ON is fine, ON -> OFF needs to release notes)
-    if (lastHoldState && !holdMode)
-    {
-        // Release all notes that are not physically held
-        for (int i = 0; i < 128; ++i)
-        {
-            bool isPhysicallyHeld = std::find(physicallyHeldNotes.begin(), physicallyHeldNotes.end(), i) != physicallyHeldNotes.end();
-            if (!isPhysicallyHeld)
-            {
-                synth.noteOff(1, i, 0.0f, true);
-                heldNotes.erase(std::remove(heldNotes.begin(), heldNotes.end(), i), heldNotes.end());
-            }
-        }
-    }
-    lastHoldState = holdMode;
-
-    juce::MidiBuffer processedMidi;
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+    
+    // Process MIDI messages for pitch and envelope control
+    int voiceMode = (int)*apvts.getRawParameterValue("voice_mode");
+    
+    // For paraphonic modes: track which notes were released this block (to deallocate voices)
+    juce::Array<int> releasedNotes;
+    
+    // Process all MIDI messages in a single loop
     for (const auto metadata : midiMessages)
     {
-        auto msg = metadata.getMessage();
+        const auto msg = metadata.getMessage();
+        
+        // Track mod wheel from CC1
+        if (msg.isController() && msg.getControllerNumber() == 1)  // CC1 = Mod Wheel
+        {
+            modWheelValue = msg.getControllerValue() / 127.0f;  // Normalize to 0-1
+            continue;  // Skip to next message
+        }
+        
+        // Track channel aftertouch (Channel Pressure)
+        if (msg.isChannelPressure())
+        {
+            currentAftertouch = msg.getChannelPressureValue() / 127.0f;  // Normalize to 0-1
+            continue;
+        }
+        
+        // Also track polyphonic aftertouch (per-note pressure)
+        if (msg.isAftertouch())
+        {
+            currentAftertouch = msg.getAfterTouchValue() / 127.0f;  // Normalize to 0-1
+            continue;
+        }
+        
+        // Track pitch bend
+        if (msg.isPitchWheel())
+        {
+            pitchBendValue = (msg.getPitchWheelValue() - 8192.0f) / 8192.0f;  // Normalize to -1 to +1
+            continue;
+        }
         if (msg.isNoteOn())
         {
-            if (std::find(physicallyHeldNotes.begin(), physicallyHeldNotes.end(), msg.getNoteNumber()) == physicallyHeldNotes.end())
-                physicallyHeldNotes.push_back(msg.getNoteNumber());
+            int midiNote = msg.getNoteNumber();
+            // Track velocity (0-127 normalized to 0-1)
+            currentVelocity = msg.getVelocity() / 127.0f;
             
-            processedMidi.addEvent(msg, metadata.samplePosition);
-
-            // Envelope/key-gate handling differs by architecture:
-            // - Para/Poly: scanned keyboard; handle here.
-            // - Mono: keybed-as-potentiometer; handled in the mono branch below.
-            if (paraMode)
+            if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L
             {
-                // Paraphonic retrigger logic
-                if (voiceMode == 3) // Para (retrigger all)
+                currentMidiNote = midiNote;
+                heldNoteCount++;
+                noteStack.push_back(midiNote);  // Add to note stack
+                
+                // Envelope retrigger logic:
+                // Mono (mode 1): Always retrigger
+                // Mono-L (mode 0): Only retrigger if no note was previously held (staccato)
+                bool shouldRetrigger = false;
+                if (voiceMode == 1) // Mono
                 {
-                    paraState->env1.reset();
-                    paraState->env2.reset();
-                    paraState->env1.noteOn();
-                    paraState->env2.noteOn();
-                    paraState->justNoteOn = true;
+                    shouldRetrigger = true;
                 }
-                else
+                else if (voiceMode == 0 && heldNoteCount == 1) // Mono-L, first note pressed
                 {
-                    // Para-L: only trigger on first key press
-                    if (paraState->activeNotes == 0)
-                    {
-                        paraState->env1.reset();
-                        paraState->env2.reset();
-                        paraState->env1.noteOn();
-                        paraState->env2.noteOn();
-                        paraState->justNoteOn = true;
-                    }
+                    shouldRetrigger = true;
                 }
-
-                paraState->activeNotes++;
+                
+                if (shouldRetrigger)
+                {
+                    monoFilterEnv.noteOn();
+                    monoAmpEnv.noteOn();
+                }
+            }
+            else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes (Para-L, Para)
+            {
+                // Allocate voice (refactored into helper)
+                int voiceToAllocate = allocateVoice();
+                
+                // Allocate voice
+                voices[voiceToAllocate].midiNote = midiNote;
+                voices[voiceToAllocate].active = true;
+                voices[voiceToAllocate].allocationTimestamp = ++voiceAllocationCounter;
+                voices[voiceToAllocate].ampGate.noteOn();
+                
+                // Envelope retrigger logic for paraphonic modes:
+                // Para-L (mode 2): Only retrigger if this is the first note after all notes were released
+                // Para (mode 3): Always retrigger on every new note-on
+                bool shouldRetriggerEnvelopes = false;
+                if (voiceMode == 2)  // Para-L
+                {
+                    // Only retrigger if no voices were active last block (transition from silence to notes)
+                    shouldRetriggerEnvelopes = !lastBlockHadAnyActiveVoices;
+                }
+                else  // Para (mode 3) - always retrigger
+                {
+                    shouldRetriggerEnvelopes = true;
+                }
+                
+                if (shouldRetriggerEnvelopes)
+                {
+                    monoFilterEnv.noteOn();
+                    monoAmpEnv.noteOn();
+                }
+            }
+            else if (voiceMode == 4)  // Poly mode
+            {
+                // Allocate voice (refactored into helper)
+                int voiceToAllocate = allocateVoice();
+                
+                // Allocate voice
+                voices[voiceToAllocate].midiNote = midiNote;
+                voices[voiceToAllocate].active = true;
+                voices[voiceToAllocate].allocationTimestamp = ++voiceAllocationCounter;
+                
+                // Trigger per-voice envelopes (always retrigger in poly mode, like MONO)
+                voices[voiceToAllocate].filterEnv.noteOn();
+                voices[voiceToAllocate].ampEnv.noteOn();
+                voices[voiceToAllocate].filter.reset();  // Clear filter state to avoid startup transients
             }
         }
         else if (msg.isNoteOff())
         {
-            physicallyHeldNotes.erase(std::remove(physicallyHeldNotes.begin(), physicallyHeldNotes.end(), msg.getNoteNumber()), physicallyHeldNotes.end());
+            int midiNote = msg.getNoteNumber();
             
-            if (!holdMode)
+            if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L
             {
-                if (paraMode)
+                heldNoteCount--;
+                
+                // Remove from note stack
+                auto it = std::find(noteStack.begin(), noteStack.end(), midiNote);
+                if (it != noteStack.end())
                 {
-                    // Para modes: decrement activeNotes and stop the specific voice
-                    paraState->activeNotes = std::max(0, paraState->activeNotes - 1);
-                    
-                    for (int i = 0; i < synth.getNumVoices(); ++i)
-                    {
-                        if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                        {
-                            if (v->getCurrentlyPlayingNote() == msg.getNoteNumber())
-                            {
-                                v->stopNote(0.0f, true);  // Allow tail-off for fade-out
-                            }
-                        }
-                    }
-                    
-                    // Turn off shared envelopes only when all notes released
-                    if (paraState->activeNotes == 0)
-                    {
-                        paraState->env1.noteOff();
-                        paraState->env2.noteOff();
-                    }
+                    noteStack.erase(it);
                 }
-                else if (monoMode)
+                
+                // If there are still held notes, switch to the most recent one
+                if (heldNoteCount > 0 && !noteStack.empty())
                 {
-                    // Mono modes: handled in mono branch below
-                    processedMidi.addEvent(msg, metadata.samplePosition);
+                    currentMidiNote = noteStack.back();  // Switch to most recent held note
+                    // For Mono mode, retrigger the envelope on note switch
+                    if (voiceMode == 1)
+                    {
+                        monoFilterEnv.noteOn();
+                        monoAmpEnv.noteOn();
+                    }
                 }
                 else
                 {
-                    // Poly mode: normal note-off handling
-                    processedMidi.addEvent(msg, metadata.samplePosition);
+                    // All keys released
+                    heldNoteCount = 0;
+                    noteStack.clear();
+                    monoFilterEnv.noteOff();
+                    monoAmpEnv.noteOff();
                 }
             }
-        }
-        else
-        {
-            processedMidi.addEvent(msg, metadata.samplePosition);
+            else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes
+            {
+                releasedNotes.add(midiNote);
+            }
+            else if (voiceMode == 4)  // Poly mode
+            {
+                // Find voice matching this note and trigger both filter and amp envelope release
+                for (int i = 0; i < MAX_VOICES; ++i)
+                {
+                    if (voices[i].active && voices[i].midiNote == midiNote)
+                    {
+                        voices[i].filterEnv.noteOff();
+                        voices[i].ampEnv.noteOff();
+                        break;
+                    }
+                }
+            }
         }
     }
-
-    if (monoMode)
+    
+    // Update filter envelope parameters in real-time
+    juce::ADSR::Parameters filterEnvParams;
+    filterEnvParams.attack = apvts.getRawParameterValue("env1_attack")->load();
+    filterEnvParams.decay = apvts.getRawParameterValue("env1_decay")->load();
+    filterEnvParams.sustain = apvts.getRawParameterValue("env1_sustain")->load();
+    filterEnvParams.release = apvts.getRawParameterValue("env1_release")->load();
+    monoFilterEnv.setParameters(filterEnvParams);
+    
+    // Update amplitude envelope parameters in real-time
+    juce::ADSR::Parameters ampEnvParams;
+    ampEnvParams.attack = apvts.getRawParameterValue("env2_attack")->load();
+    ampEnvParams.decay = apvts.getRawParameterValue("env2_decay")->load();
+    ampEnvParams.sustain = apvts.getRawParameterValue("env2_sustain")->load();
+    ampEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
+    monoAmpEnv.setParameters(ampEnvParams);
+    
+    // Update poly mode per-voice envelope parameters in real-time
+    if (voiceMode == 4)
     {
-        // Mono architecture: emulate keybed-as-potentiometer.
-        // - One "CV" (pitch) value at a time (Mono-L: lowest note priority, Mono: last note priority)
-        // - One gate: HIGH if any key held, LOW if no keys held
-        // - Mono-L pitch changes do NOT generate new note-ons (prevents multiple voices/pitches)
-        const bool isMonoL = (voiceMode == 0);
-
-        // Update held notes from the incoming MIDI (scanned input)
-        for (const auto metadata : processedMidi)
+        for (int i = 0; i < MAX_VOICES; ++i)
         {
-            const auto msg = metadata.getMessage();
-            if (msg.isNoteOn())
-            {
-                if (std::find(heldNotes.begin(), heldNotes.end(), msg.getNoteNumber()) == heldNotes.end())
-                    heldNotes.push_back(msg.getNoteNumber());
-            }
-            else if (msg.isNoteOff())
-            {
-                heldNotes.erase(std::remove(heldNotes.begin(), heldNotes.end(), msg.getNoteNumber()), heldNotes.end());
-            }
+            voices[i].filterEnv.setParameters(filterEnvParams);
+            voices[i].ampEnv.setParameters(ampEnvParams);
         }
-
-        const bool gateHigh = !heldNotes.empty();
-        const int desiredNote = gateHigh ?
-            (isMonoL ? *std::min_element(heldNotes.begin(), heldNotes.end()) : heldNotes.back()) :
-            -1;
-
-        juce::MidiBuffer monoBuffer;
-
-        if (!gateHigh)
-        {
-            // Gate LOW: release shared envelopes (tail continues while voices render)
-            if (paraState->activeNotes != 0)
-            {
-                paraState->activeNotes = 0;
-                paraState->env1.noteOff();
-                paraState->env2.noteOff();
-            }
-            currentPlayingNote = -1;
-        }
-        else
-        {
-            // Gate HIGH: ensure envelopes are running
-            if (paraState->activeNotes == 0)
-            {
-                paraState->env1.reset();
-                paraState->env2.reset();
-                paraState->env1.noteOn();
-                paraState->env2.noteOn();
-                paraState->justNoteOn = true;
-                paraState->activeNotes = 1;
-
-                // Start exactly one voice for the gate rising edge
-                for (int i = 0; i < synth.getNumVoices(); ++i)
-                    synth.getVoice(i)->stopNote(0.0f, false);
-
-                monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
-                currentPlayingNote = desiredNote;
-            }
-            else
-            {
-                // Gate already high
-                if (!isMonoL)
-                {
-                    // Mono (retrigger): restart envelopes and voice on every new desired pitch
-                    if (desiredNote != currentPlayingNote)
-                    {
-                        paraState->env1.reset();
-                        paraState->env2.reset();
-                        paraState->env1.noteOn();
-                        paraState->env2.noteOn();
-                        paraState->justNoteOn = true;
-                        paraState->activeNotes = 1;
-
-                        for (int i = 0; i < synth.getNumVoices(); ++i)
-                            synth.getVoice(i)->stopNote(0.0f, false);
-
-                        monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
-                        currentPlayingNote = desiredNote;
-                    }
-                }
-                else
-                {
-                    // Mono-L: retune the single running voice without generating a new note-on
-                    if (desiredNote != currentPlayingNote)
-                    {
-                        Neon37Voice* active = nullptr;
-                        for (int i = 0; i < synth.getNumVoices(); ++i)
-                        {
-                            if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                            {
-                                if (v->isVoiceActive())
-                                {
-                                    if (!active) active = v;
-                                    else v->stopNote(0.0f, false); // enforce single voice
-                                }
-                            }
-                        }
-
-                        if (active)
-                            active->retuneToMidiNote(desiredNote);
-                        else
-                            monoBuffer.addEvent(juce::MidiMessage::noteOn(1, desiredNote, 1.0f), 0);
-
-                        currentPlayingNote = desiredNote;
-                    }
-                }
-            }
-        }
-
-        midiMessages.swapWith(monoBuffer);
+    }
+    
+    // === LFO RENDERING ===
+    // Update LFO1 parameters
+    float lfo1Rate = apvts.getRawParameterValue("lfo1_rate")->load();
+    bool lfo1SyncEnabled = (bool)*apvts.getRawParameterValue("lfo1_sync");
+    if (lfo1SyncEnabled)
+    {
+        int lfo1SyncVal = (int)*apvts.getRawParameterValue("lfo1_sync_val");
+        lfo1.rate = getSyncMultiplier(lfo1SyncVal) * 2.0f;  // Tempo-synced (2 Hz as base rate)
     }
     else
     {
-        heldNotes.clear();
-        currentPlayingNote = -1;
-        midiMessages.swapWith(processedMidi);
+        lfo1.rate = lfo1Rate;
     }
-
-    // Update parameters for all voices
-    float cutoff = *apvts.getRawParameterValue ("cutoff");
-    float resonance = *apvts.getRawParameterValue ("resonance");
-    float drive = *apvts.getRawParameterValue ("drive");
-    float egDepth = *apvts.getRawParameterValue ("eg_depth");
+    lfo1.waveform = (int)*apvts.getRawParameterValue("lfo1_wave");
+    lfo1.pitchAmount = apvts.getRawParameterValue("lfo1_pitch")->load();
+    lfo1.filterAmount = apvts.getRawParameterValue("lfo1_filter")->load();
+    lfo1.ampAmount = apvts.getRawParameterValue("lfo1_amp")->load();
     
-    // LFO 1
-    float lfo1Rate = *apvts.getRawParameterValue ("lfo1_rate");
-    bool lfo1Sync = *apvts.getRawParameterValue ("lfo1_sync") > 0.5f;
-    int lfo1Wave = (int)*apvts.getRawParameterValue ("lfo1_wave");
-    float lfo1Pitch = *apvts.getRawParameterValue ("lfo1_pitch");
-    float lfo1Filter = *apvts.getRawParameterValue ("lfo1_filter");
-    float lfo1Amp = *apvts.getRawParameterValue ("lfo1_amp");
-
-    // LFO 2
-    float lfo2Rate = *apvts.getRawParameterValue ("lfo2_rate");
-    bool lfo2Sync = *apvts.getRawParameterValue ("lfo2_sync") > 0.5f;
-    int lfo2Wave = (int)*apvts.getRawParameterValue ("lfo2_wave");
-    float lfo2Pitch = *apvts.getRawParameterValue ("lfo2_pitch");
-    float lfo2Filter = *apvts.getRawParameterValue ("lfo2_filter");
-    float lfo2Amp = *apvts.getRawParameterValue ("lfo2_amp");
-
-    // Velocity/AT/CC
-    float velPitch = *apvts.getRawParameterValue ("vel_pitch");
-    float velFilter = *apvts.getRawParameterValue ("vel_filter");
-    float velAmp = *apvts.getRawParameterValue ("vel_amp");
-    float atPitch = *apvts.getRawParameterValue ("at_pitch");
-    float atFilter = *apvts.getRawParameterValue ("at_filter");
-    float atAmp = *apvts.getRawParameterValue ("at_amp");
-
-    float pbPitch = *apvts.getRawParameterValue ("pb_pitch");
-    float pbFilter = *apvts.getRawParameterValue ("pb_filter");
-    float pbAmp = *apvts.getRawParameterValue ("pb_amp");
-    
-    bool lfo1Mw = *apvts.getRawParameterValue ("lfo1_mw") > 0.5f;
-    bool lfo2Mw = *apvts.getRawParameterValue ("lfo2_mw") > 0.5f;
-    bool velMw = *apvts.getRawParameterValue ("vel_mw") > 0.5f;
-    bool atMw = *apvts.getRawParameterValue ("at_mw") > 0.5f;
-    bool pbMw = *apvts.getRawParameterValue ("pb_mw") > 0.5f;
-    
-    // Handle MIDI CC and Aftertouch
-    for (const auto metadata : processedMidi)
+    // Update LFO2 parameters
+    float lfo2Rate = apvts.getRawParameterValue("lfo2_rate")->load();
+    bool lfo2SyncEnabled = (bool)*apvts.getRawParameterValue("lfo2_sync");
+    if (lfo2SyncEnabled)
     {
-        auto msg = metadata.getMessage();
-        if (msg.isAftertouch())
-        {
-            for (int i = 0; i < synth.getNumVoices(); ++i)
-                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                    v->setAftertouch(msg.getAfterTouchValue() / 127.0f);
-        }
-        else if (msg.isChannelPressure())
-        {
-            for (int i = 0; i < synth.getNumVoices(); ++i)
-                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                    v->setAftertouch(msg.getChannelPressureValue() / 127.0f);
-        }
-        else if (msg.isController() && msg.getControllerNumber() == 1)
-        {
-            for (int i = 0; i < synth.getNumVoices(); ++i)
-                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                    v->setModWheel(msg.getControllerValue() / 127.0f);
-        }
-        else if (msg.isPitchWheel())
-        {
-            for (int i = 0; i < synth.getNumVoices(); ++i)
-                if (auto v = dynamic_cast<Neon37Voice*>(synth.getVoice(i)))
-                    v->pitchWheelMoved(msg.getPitchWheelValue());
-        }
+        int lfo2SyncVal = (int)*apvts.getRawParameterValue("lfo2_sync_val");
+        lfo2.rate = getSyncMultiplier(lfo2SyncVal) * 2.0f;  // Tempo-synced (2 Hz as base rate)
     }
-
-    int activeVoices = 0;
-    for (int i = 0; i < synth.getNumVoices(); ++i)
-        if (synth.getVoice(i)->isVoiceActive())
-            activeVoices++;
-
-    for (int i = 0; i < synth.getNumVoices(); ++i)
+    else
     {
-        if (auto voice = dynamic_cast<Neon37Voice*> (synth.getVoice (i)))
+        lfo2.rate = lfo2Rate;
+    }
+    lfo2.waveform = (int)*apvts.getRawParameterValue("lfo2_wave");
+    lfo2.pitchAmount = apvts.getRawParameterValue("lfo2_pitch")->load();
+    lfo2.filterAmount = apvts.getRawParameterValue("lfo2_filter")->load();
+    lfo2.ampAmount = apvts.getRawParameterValue("lfo2_amp")->load();
+    
+    // Check if mod wheel scaling is enabled
+    modWheelEnabled = (bool)*apvts.getRawParameterValue("mw_enable");
+    float modWheelScale = modWheelEnabled ? modWheelValue : 1.0f;
+    
+    // Advance LFO phases for this block and generate waveforms
+    float phaseIncrement1 = (lfo1.rate / (float)currentSampleRate) * juce::MathConstants<float>::twoPi;
+    float phaseIncrement2 = (lfo2.rate / (float)currentSampleRate) * juce::MathConstants<float>::twoPi;
+    
+    lfo1.phase += phaseIncrement1 * buffer.getNumSamples();
+    lfo2.phase += phaseIncrement2 * buffer.getNumSamples();
+    
+    // Wrap phases to [0, 2π)
+    while (lfo1.phase >= juce::MathConstants<float>::twoPi)
+        lfo1.phase -= juce::MathConstants<float>::twoPi;
+    while (lfo2.phase >= juce::MathConstants<float>::twoPi)
+        lfo2.phase -= juce::MathConstants<float>::twoPi;
+    
+    // Generate LFO waveforms (output range: -1 to +1, representing -100% to +100%)
+    float lfo1Output = generateLFOWaveform(lfo1.phase, lfo1.waveform);
+    float lfo2Output = generateLFOWaveform(lfo2.phase, lfo2.waveform);
+    
+    // Calculate modulation amounts (all scaled by mod wheel if enabled)
+    // LFO output is bipolar: -1 to +1 representing -100% to +100%
+    float lfoPitchMod = lfo1Output * lfo1.pitchAmount + lfo2Output * lfo2.pitchAmount;
+    float lfoFilterMod = lfo1Output * lfo1.filterAmount + lfo2Output * lfo2.filterAmount;
+    float lfoAmpMod = lfo1Output * lfo1.ampAmount + lfo2Output * lfo2.ampAmount;
+    
+    // === CALCULATE ALL MODULATIONS (refactored into helper) ===
+    ModulationState modState;
+    calculateAllModulations(modState, lfoFilterMod, lfoPitchMod, lfoAmpMod, modWheelScale);
+    
+    float totalPitchModSemitones = modState.pitchModSemitones;
+    float totalFilterModMultiplier = modState.totalFilterModMultiplier;
+    float totalAmpModMultiplier = modState.totalAmpModMultiplier;
+    
+    // Get oscillator parameters
+    int osc1Wave = (int)*apvts.getRawParameterValue("osc1_wave");
+    int osc1Octave = (int)*apvts.getRawParameterValue("osc1_octave");
+    int osc1Semitones = (int)*apvts.getRawParameterValue("osc1_semitones");
+    float osc1Fine = apvts.getRawParameterValue("osc1_fine")->load();
+    
+    int osc2Wave = (int)*apvts.getRawParameterValue("osc2_wave");
+    int osc2Octave = (int)*apvts.getRawParameterValue("osc2_octave");
+    int osc2Semitones = (int)*apvts.getRawParameterValue("osc2_semitones");
+    float osc2Fine = apvts.getRawParameterValue("osc2_fine")->load();
+    
+    // Get mixer levels from parameters (in dB, so convert to linear)
+    float mixerOsc1Db = apvts.getRawParameterValue("mixer_osc1")->load();
+    float mixerOsc2Db = apvts.getRawParameterValue("mixer_osc2")->load();
+    float mixerSub1Db = apvts.getRawParameterValue("mixer_sub1")->load();
+    
+    float mixerOsc1 = juce::Decibels::decibelsToGain(mixerOsc1Db);
+    float mixerOsc2 = juce::Decibels::decibelsToGain(mixerOsc2Db);
+    float mixerSub1 = juce::Decibels::decibelsToGain(mixerSub1Db);
+    
+    // Global oscillator level scaling to prevent overdrive (-12dB to keep headroom)
+    constexpr float oscLevelScale = 0.25f;
+    mixerOsc1 *= oscLevelScale;
+    mixerOsc2 *= oscLevelScale;
+    mixerSub1 *= oscLevelScale;
+    
+    // Get filter parameters
+    float baseCutoff = apvts.getRawParameterValue("cutoff")->load();
+    float resonance = apvts.getRawParameterValue("resonance")->load();
+    float egDepth = apvts.getRawParameterValue("eg_depth")->load();
+    
+    // Get master volume
+    float masterVolDb = apvts.getRawParameterValue("master_volume")->load();
+    float masterVol = juce::Decibels::decibelsToGain(masterVolDb);
+    
+    // Create a working buffer for synthesis
+    juce::AudioBuffer<float> synthBuffer(totalNumOutputChannels, buffer.getNumSamples());
+    synthBuffer.clear();
+    
+    // Create buffer for amplitude envelope values
+    juce::AudioBuffer<float> ampEnvBuffer(1, buffer.getNumSamples());
+    ampEnvBuffer.clear();
+    
+    // Generate and mix oscillators
+    float twoPiOverSr = juce::MathConstants<float>::twoPi / (float)currentSampleRate;
+    
+    if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L rendering
+    {
+        // Calculate base frequency from current MIDI note
+        float baseFreq = 440.0f * std::pow(2.0f, (currentMidiNote - 69) / 12.0f);
+        
+        // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
+        float lfoModFreq = baseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
+        
+        // Osc1 frequency (with LFO modulation)
+        float osc1Freq = lfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
+        
+        // Osc2 frequency (with LFO modulation)
+        float osc2Freq = lfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
+        
+        // Sub oscillator is one octave below osc1
+        float subFreq = osc1Freq * 0.5f;
+        
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
-            voice->updateParameters (
-                *apvts.getRawParameterValue ("osc1_wave"),
-                *apvts.getRawParameterValue ("osc1_octave"),
-                *apvts.getRawParameterValue ("osc1_semitones"),
-                *apvts.getRawParameterValue ("osc1_fine"),
-                *apvts.getRawParameterValue ("osc2_wave"),
-                *apvts.getRawParameterValue ("osc2_octave"),
-                *apvts.getRawParameterValue ("osc2_semitones"),
-                *apvts.getRawParameterValue ("osc2_fine"),
-                *apvts.getRawParameterValue ("env1_attack"),
-                *apvts.getRawParameterValue ("env1_decay"),
-                *apvts.getRawParameterValue ("env1_sustain"),
-                *apvts.getRawParameterValue ("env1_release"),
-                *apvts.getRawParameterValue ("env2_attack"),
-                *apvts.getRawParameterValue ("env2_decay"),
-                *apvts.getRawParameterValue ("env2_sustain"),
-                *apvts.getRawParameterValue ("env2_release"),
-                *apvts.getRawParameterValue ("mixer_osc1"),
-                *apvts.getRawParameterValue ("mixer_osc2"),
-                *apvts.getRawParameterValue ("mixer_sub1"),
-                *apvts.getRawParameterValue ("mixer_noise"),
-                cutoff, resonance, drive, egDepth,
-                *apvts.getRawParameterValue ("env_exp_curv") > 0.5f,
-                lfo1Rate, lfo1Sync, lfo1Wave, lfo1Pitch, lfo1Filter, lfo1Amp,
-                lfo2Rate, lfo2Sync, lfo2Wave, lfo2Pitch, lfo2Filter, lfo2Amp,
-                velPitch, velFilter, velAmp,
-                atPitch, atFilter, atAmp,
-                pbPitch, pbFilter, pbAmp,
-                lfo1Mw, lfo2Mw, velMw, atMw, pbMw,
-                voiceMode,
-                activeVoices
-            );
+            // Get envelope values
+            float filterEnvValue = monoFilterEnv.getNextSample();
+            float ampEnvValue = monoAmpEnv.getNextSample();
+            ampEnvBuffer.setSample(0, sample, ampEnvValue);
+            
+            // Calculate and apply modulated cutoff
+            float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
+            monoFilter.setCutoffFrequencyHz(modulatedCutoff);
+            monoFilter.setResonance(resonance);
+            
+            // Generate oscillator samples
+            float osc1Sample = generateWaveform(osc1Phase, osc1Wave) * mixerOsc1;
+            float osc2Sample = generateWaveform(osc2Phase, osc2Wave) * mixerOsc2;
+            float subSample = generateWaveform(subOscPhase, 2) * mixerSub1;
+            
+            float mixed = osc1Sample + osc2Sample + subSample;
+            
+            for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+            {
+                synthBuffer.setSample(channel, sample, mixed);
+            }
+            
+            // Update phases
+            osc1Phase += twoPiOverSr * osc1Freq;
+            osc2Phase += twoPiOverSr * osc2Freq;
+            subOscPhase += twoPiOverSr * subFreq;
+            
+            // Wrap phases
+            if (osc1Phase > juce::MathConstants<float>::twoPi) osc1Phase -= juce::MathConstants<float>::twoPi;
+            if (osc2Phase > juce::MathConstants<float>::twoPi) osc2Phase -= juce::MathConstants<float>::twoPi;
+            if (subOscPhase > juce::MathConstants<float>::twoPi) subOscPhase -= juce::MathConstants<float>::twoPi;
         }
     }
-
-    // Calculate shared envelopes for Para/Mono modes AFTER MIDI processing
-    if (paraMode || monoMode)
-        paraState->calculate(buffer.getNumSamples(), expEnv);
-
-    // Render Synth with per-voice filtering
-    synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
-
-    // Apply Master Gain
-    float masterVolume = *apvts.getRawParameterValue ("master_volume");
-    masterGain.setGainDecibels (masterVolume - 6.0f);
+    else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic rendering (modes 2, 3)
+    {
+        // Handle note-offs for paraphonic mode
+        for (int note : releasedNotes)
+        {
+            for (int i = 0; i < MAX_VOICES; ++i)
+            {
+                if (voices[i].active && voices[i].midiNote == note)
+                {
+                    voices[i].ampGate.noteOff();
+                    break;
+                }
+            }
+        }
+        
+        // Track if any voice is still active before processing this block
+        bool anyVoiceActiveBefore = false;
+        int activeVoiceCount = 0;
+        for (int i = 0; i < MAX_VOICES; ++i)
+        {
+            if (voices[i].active)
+            {
+                anyVoiceActiveBefore = true;
+                ++activeVoiceCount;
+            }
+        }
+        
+        // Calculate voice scaling to prevent overdrive from multiple voices mixing
+        float voiceGain = activeVoiceCount > 0 ? 1.0f / (float)activeVoiceCount : 1.0f;
+        
+        // Render each active voice
+        for (int voiceIdx = 0; voiceIdx < MAX_VOICES; ++voiceIdx)
+        {
+            if (!voices[voiceIdx].active)
+                continue;
+            
+            // Calculate frequencies for this voice (with all pitch modulations)
+            float voiceBaseFreq = 440.0f * std::pow(2.0f, (voices[voiceIdx].midiNote - 69) / 12.0f);
+            
+            // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
+            float voiceLfoModFreq = voiceBaseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
+            
+            float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
+            float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
+            float voiceSubFreq = voiceOsc1Freq * 0.5f;
+            
+            // Render voice's oscillators to voiceBuffer
+            voices[voiceIdx].voiceBuffer.clear();
+            
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                // Generate oscillator samples for this voice
+                float osc1Sample = generateWaveform(voices[voiceIdx].osc1Phase, osc1Wave) * mixerOsc1;
+                float osc2Sample = generateWaveform(voices[voiceIdx].osc2Phase, osc2Wave) * mixerOsc2;
+                float subSample = generateWaveform(voices[voiceIdx].subOscPhase, 2) * mixerSub1;
+                
+                float mixed = osc1Sample + osc2Sample + subSample;
+                
+                // Apply voice's amp gate (gates the oscillators on/off)
+                float gateValue = voices[voiceIdx].ampGate.getNextSample();
+                mixed *= gateValue;
+                
+                for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+                {
+                    voices[voiceIdx].voiceBuffer.addSample(channel, sample, mixed);
+                }
+                
+                // Update voice's oscillator phases
+                voices[voiceIdx].osc1Phase += twoPiOverSr * voiceOsc1Freq;
+                voices[voiceIdx].osc2Phase += twoPiOverSr * voiceOsc2Freq;
+                voices[voiceIdx].subOscPhase += twoPiOverSr * voiceSubFreq;
+                
+                // Wrap phases
+                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].osc2Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc2Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].subOscPhase > juce::MathConstants<float>::twoPi) voices[voiceIdx].subOscPhase -= juce::MathConstants<float>::twoPi;
+            }
+            
+            // Mix this voice's buffer to synthesis buffer
+            for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+            {
+                synthBuffer.addFrom(channel, 0, voices[voiceIdx].voiceBuffer, channel, 0, buffer.getNumSamples(), voiceGain);
+            }
+            
+            // Mark voice inactive if gate is fully released
+            if (!voices[voiceIdx].ampGate.isActive())
+            {
+                voices[voiceIdx].active = false;
+            }
+        }
+        
+        // Check if all voices just became inactive (transition from at least one active to all inactive)
+        bool anyVoiceActiveAfter = false;
+        for (int i = 0; i < MAX_VOICES; ++i)
+        {
+            if (voices[i].active)
+            {
+                anyVoiceActiveAfter = true;
+                break;
+            }
+        }
+        
+        // When last voice becomes inactive, trigger envelope release
+        if (anyVoiceActiveBefore && !anyVoiceActiveAfter)
+        {
+            monoFilterEnv.noteOff();
+            monoAmpEnv.noteOff();
+        }
+        
+        // Generate envelope values for paraphonic mode
+        // Continue processing as long as envelopes are still active (releasing)
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+        {
+            float filterEnvValue = monoFilterEnv.getNextSample();
+            float ampEnvValue = monoAmpEnv.getNextSample();
+            ampEnvBuffer.setSample(0, sample, ampEnvValue);
+            
+            // Calculate and apply modulated cutoff
+            float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
+            monoFilter.setCutoffFrequencyHz(modulatedCutoff);
+            monoFilter.setResonance(resonance);
+        }
+        
+        // Update tracking flag for next block's retrigger logic
+        lastBlockHadAnyActiveVoices = anyVoiceActiveAfter;
+    }
+    else if (voiceMode == 4)  // Poly mode: full per-voice signal chain
+    {
+        // Handle note-offs for poly mode
+        for (int note : releasedNotes)
+        {
+            for (int i = 0; i < MAX_VOICES; ++i)
+            {
+                if (voices[i].active && voices[i].midiNote == note)
+                {
+                    voices[i].ampEnv.noteOff();
+                    break;
+                }
+            }
+        }
+        
+        // Render each active voice with complete per-voice signal chain
+        for (int voiceIdx = 0; voiceIdx < MAX_VOICES; ++voiceIdx)
+        {
+            if (!voices[voiceIdx].active)
+                continue;
+            
+            // Calculate frequencies for this voice (with LFO pitch modulation)
+            float voiceBaseFreq = 440.0f * std::pow(2.0f, (voices[voiceIdx].midiNote - 69) / 12.0f);
+            
+            // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
+            float voiceLfoModFreq = voiceBaseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
+            
+            float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
+            float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
+            float voiceSubFreq = voiceOsc1Freq * 0.5f;
+            
+            // Render voice's oscillators
+            voices[voiceIdx].voiceBuffer.clear();
+            
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                // Generate oscillator samples for this voice
+                float osc1Sample = generateWaveform(voices[voiceIdx].osc1Phase, osc1Wave) * mixerOsc1;
+                float osc2Sample = generateWaveform(voices[voiceIdx].osc2Phase, osc2Wave) * mixerOsc2;
+                float subSample = generateWaveform(voices[voiceIdx].subOscPhase, 2) * mixerSub1;
+                
+                float mixed = (osc1Sample + osc2Sample + subSample);
+                
+                for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+                {
+                    voices[voiceIdx].voiceBuffer.setSample(channel, sample, mixed);
+                }
+                
+                // Update voice's oscillator phases
+                voices[voiceIdx].osc1Phase += twoPiOverSr * voiceOsc1Freq;
+                voices[voiceIdx].osc2Phase += twoPiOverSr * voiceOsc2Freq;
+                voices[voiceIdx].subOscPhase += twoPiOverSr * voiceSubFreq;
+                
+                // Wrap phases
+                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].osc2Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc2Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].subOscPhase > juce::MathConstants<float>::twoPi) voices[voiceIdx].subOscPhase -= juce::MathConstants<float>::twoPi;
+            }
+            
+            // Process this voice through its own filter with all modulations
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float filterEnvValue = voices[voiceIdx].filterEnv.getNextSample();
+                
+                // Calculate and apply modulated cutoff
+                float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
+                voices[voiceIdx].filter.setCutoffFrequencyHz(modulatedCutoff);
+                voices[voiceIdx].filter.setResonance(resonance);
+            }
+            
+            // Apply per-voice filter
+            juce::dsp::AudioBlock<float> voiceBlock(voices[voiceIdx].voiceBuffer);
+            juce::dsp::ProcessContextReplacing<float> voiceContext(voiceBlock);
+            voices[voiceIdx].filter.process(voiceContext);
+            
+            // Apply per-voice amplitude envelope and mix to output (with all modulations)
+            // Generate all amp env samples first, then apply to all channels
+            juce::AudioBuffer<float> voiceAmpEnvBuffer(1, buffer.getNumSamples());
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float ampEnvValue = voices[voiceIdx].ampEnv.getNextSample();
+                // Apply all amplitude modulations (LFO, velocity, aftertouch)
+                ampEnvValue *= totalAmpModMultiplier;
+                voiceAmpEnvBuffer.setSample(0, sample, ampEnvValue);
+            }
+            
+            // Mix to output with envelope scaling
+            for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+            {
+                for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+                {
+                    float ampEnvValue = voiceAmpEnvBuffer.getSample(0, sample);
+                    float voiceSample = voices[voiceIdx].voiceBuffer.getSample(channel, sample);
+                    synthBuffer.addSample(channel, sample, voiceSample * ampEnvValue);
+                }
+            }
+            
+            // Don't mark voice inactive until envelope is fully released
+            // Voice will continue rendering (silently) until ampEnv.isActive() returns false
+            if (!voices[voiceIdx].ampEnv.isActive())
+            {
+                voices[voiceIdx].active = false;
+            }
+        }
+    }
     
-    juce::dsp::AudioBlock<float> block (buffer);
-    juce::dsp::ProcessContextReplacing<float> context (block);
+    // Process through shared filter (MONO and Paraphonic modes only)
+    if (voiceMode != 4)  // Not poly mode
+    {
+        juce::dsp::AudioBlock<float> block(synthBuffer);
+        juce::dsp::ProcessContextReplacing<float> context(block);
+        monoFilter.process(context);
+    }
     
-    masterGain.process (context);
+    // Apply master volume and amplitude envelope (for MONO/Paraphonic) or just master volume (for Poly), then output
+    for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+    {
+        buffer.copyFrom(channel, 0, synthBuffer, channel, 0, buffer.getNumSamples());
+        
+        if (voiceMode != 4)  // Not poly mode - apply shared amp envelope with all modulations
+        {
+            // Apply master volume and shared amplitude envelope per-sample
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float ampValue = ampEnvBuffer.getSample(0, sample);
+                // Apply all amplitude modulations (LFO, velocity, aftertouch)
+                ampValue *= totalAmpModMultiplier;
+                float sample_val = buffer.getSample(channel, sample);
+                buffer.setSample(channel, sample, sample_val * masterVol * ampValue);
+            }
+        }
+        else  // Poly mode - just apply master volume (per-voice envelopes already applied)
+        {
+            // Apply master volume only
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                float sample_val = buffer.getSample(channel, sample);
+                buffer.setSample(channel, sample, sample_val * masterVol);
+            }
+        }
+    }
+}
+
+float Neon37AudioProcessor::generateWaveform(float phase, int waveformType)
+{
+    // Normalize phase to 0-1
+    float normPhase = phase / juce::MathConstants<float>::twoPi;
+    normPhase = normPhase - std::floor(normPhase);
+    
+    switch (waveformType)
+    {
+        case 0: // Sine
+            return std::sin(phase);
+            
+        case 1: // Triangle
+            return 4.0f * std::abs(normPhase - 0.5f) - 1.0f;
+            
+        case 2: // Sawtooth
+            return 2.0f * normPhase - 1.0f;
+            
+        case 3: // Square
+            return normPhase < 0.5f ? 1.0f : -1.0f;
+            
+        case 4: // 25% Pulse
+            return normPhase < 0.25f ? 1.0f : -1.0f;
+            
+        case 5: // 10% Pulse
+            return normPhase < 0.10f ? 1.0f : -1.0f;
+            
+        default:
+            return std::sin(phase);
+    }
 }
 
 bool Neon37AudioProcessor::hasEditor() const
@@ -1219,20 +892,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
 
     // Master Section
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("master_volume", "Volume", juce::NormalisableRange<float> (-60.0f, 10.0f, 0.1f, 2.0f), 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("master_freq", "Master Freq", 410.0f, 470.0f, 440.0f)); // Centered at 440Hz
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("master_tune", "Master Tune", -100.0f, 100.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("master_tune", "Master Tune", juce::NormalisableRange<float> (400.0f, 480.0f, 0.1f, 1.0f), 440.0f)); // A4 center
 
     // Oscillator 1
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_wave", "Osc 1 Wave", juce::StringArray { "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 1));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_octave", "Osc 1 Octave", juce::StringArray { "16'", "8'", "4'", "2'" }, 1));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc1_semitones", "Osc 1 Semitones", -12.0f, 12.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc1_fine", "Osc 1 Fine", -0.5f, 0.5f, 0.0f)); // ±50 cents
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc1_wave", "Osc 1 Wave", juce::StringArray { "Sine", "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 2)); // Default: Sawtooth
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("osc1_octave", "Osc 1 Octave", -3, 3, 0));
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("osc1_semitones", "Osc 1 Semitones", -12, 12, 0));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc1_fine", "Osc 1 Fine", juce::NormalisableRange<float> (-0.5f, 0.5f, 0.01f, 1.0f), 0.0f)); // ±50 cents
     
     // Oscillator 2
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_wave", "Osc 2 Wave", juce::StringArray { "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 1));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_octave", "Osc 2 Octave", juce::StringArray { "16'", "8'", "4'", "2'" }, 1));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc2_semitones", "Osc 2 Semitones", -12.0f, 12.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc2_fine", "Osc 2 Fine", -0.5f, 0.5f, 0.0f)); // ±50 cents
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("osc2_wave", "Osc 2 Wave", juce::StringArray { "Sine", "Triangle", "Sawtooth", "Square", "25% Pulse", "10% Pulse" }, 2)); // Default: Sawtooth
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("osc2_octave", "Osc 2 Octave", -3, 3, 0));
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("osc2_semitones", "Osc 2 Semitones", -12, 12, 0));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc2_fine", "Osc 2 Fine", juce::NormalisableRange<float> (-0.5f, 0.5f, 0.01f, 1.0f), 0.0f)); // ±50 cents
 
     // Global Osc
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("osc_freq", "Osc Frequency", -7.0f, 7.0f, 0.0f));
@@ -1250,20 +922,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("cutoff", "Cutoff", juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 20000.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("resonance", "Resonance", 0.0f, 1.2f, 0.0f)); // Up to 1.2 for self-oscillation
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("drive", "Drive", 1.0f, 25.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", -5.0f, 5.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f, 1.0f), 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("key_track", "Key Track", 0.0f, 2.0f, 0.0f));
 
-    // Envelope 1 (Filter/Mod)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_attack", "Env 1 Attack", juce::NormalisableRange<float> (0.0f, 10.0f, 0.001f, 0.3f), 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_decay", "Env 1 Decay", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.3f), 0.1f));
+    // Envelope 1 (Filter/Mod) - Exponential time range 3ms to 10s
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_attack", "Env 1 Attack", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.003f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_decay", "Env 1 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_sustain", "Env 1 Sustain", 0.0f, 1.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_release", "Env 1 Release", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.3f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_release", "Env 1 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
 
-    // Envelope 2 (Amplitude)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_attack", "Env 2 Attack", juce::NormalisableRange<float> (0.0f, 10.0f, 0.001f, 0.3f), 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_decay", "Env 2 Decay", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.3f), 0.1f));
+    // Envelope 2 (Amplitude) - Exponential time range 3ms to 10s
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_attack", "Env 2 Attack", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.003f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_decay", "Env 2 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_sustain", "Env 2 Sustain", 0.0f, 1.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_release", "Env 2 Release", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.3f), 0.1f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_release", "Env 2 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("env_exp_curv", "Exponential Envelopes", true));
 
     // Arpeggiator
@@ -1279,44 +951,172 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterBool> ("gliss_on_gat_leg", "Gliss On Gat Leg", false));
 
     // LFO 1
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_rate", "LFO 1 Rate", juce::NormalisableRange<float> (0.01f, 50.0f, 0.01f, 0.3f), 1.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_rate", "LFO 1 Rate", juce::NormalisableRange<float> (0.01f, 100.0f, 0.01f, 0.3f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo1_sync", "LFO 1 Sync", false));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_wave", "LFO 1 Wave", juce::StringArray { "Sine", "Saw Up", "Saw Down", "Square", "S&H" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_sync_val", "LFO 1 Sync Val", juce::StringArray { "1/64", "1/32", "1/16", "1/8", "1/4", "1/2", "1/1", "2/1", "3/1", "4/1", "8/1" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_wave", "LFO 1 Wave", juce::StringArray { "Triangle", "Ramp Up", "Ramp Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_pitch", "LFO 1 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_filter", "LFO 1 Filter", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_amp", "LFO 1 Amp", 0.0f, 1.0f, 0.0f));
 
     // LFO 2
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_rate", "LFO 2 Rate", juce::NormalisableRange<float> (0.01f, 50.0f, 0.01f, 0.3f), 1.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_rate", "LFO 2 Rate", juce::NormalisableRange<float> (0.01f, 100.0f, 0.01f, 0.3f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo2_sync", "LFO 2 Sync", false));
-    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_wave", "LFO 2 Wave", juce::StringArray { "Sine", "Saw Up", "Saw Down", "Square", "S&H" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_sync_val", "LFO 2 Sync Val", juce::StringArray { "1/64", "1/32", "1/16", "1/8", "1/4", "1/2", "1/1", "2/1", "3/1", "4/1", "8/1" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_wave", "LFO 2 Wave", juce::StringArray { "Triangle", "Ramp Up", "Ramp Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_pitch", "LFO 2 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_filter", "LFO 2 Filter", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_amp", "LFO 2 Amp", 0.0f, 1.0f, 0.0f));
 
-    // Velocity
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_pitch", "Vel Pitch", 0.0f, 1.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_filter", "Vel Filter", 0.0f, 1.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_amp", "Vel Amp", 0.0f, 1.0f, 1.0f));
+    // Velocity - Pitch: -12 to +12 semitones (snap), Filter and Amp: -200% to +500% (continuous)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_pitch", "Vel Pitch", juce::NormalisableRange<float>(-12.0f, 12.0f, 1.0f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_filter", "Vel Filter", -5.0f, 5.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("vel_amp", "Vel Amp", -2.0f, 2.0f, 0.0f));
 
-    // Aftertouch
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_pitch", "AT Pitch", 0.0f, 1.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_filter", "AT Filter", 0.0f, 1.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_amp", "AT Amp", 0.0f, 1.0f, 0.0f));
+    // Aftertouch - Pitch: -12 to +12 semitones (snap), Filter and Amp: -200% to +500% (continuous)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_pitch", "AT Pitch", juce::NormalisableRange<float>(-12.0f, 12.0f, 1.0f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_filter", "AT Filter", -5.0f, 5.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_amp", "AT Amp", -2.0f, 2.0f, 0.0f));
 
-    // Pitch Bend
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_pitch", "PB Pitch", juce::NormalisableRange<float>(0.0f, 12.0f, 1.0f), 2.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_filter", "PB Filter", 0.0f, 1.0f, 0.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_amp", "PB Amp", 0.0f, 1.0f, 0.0f));
+    // Pitch Bend - Pitch: 1-12 semitones (snap), no filter/amp
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_pitch", "PB Pitch", juce::NormalisableRange<float>(1.0f, 12.0f, 1.0f), 2.0f));
 
-    // Mod Wheel Toggles
+    // Mod Wheel Toggles - removed vel_mw, at_mw, pb_mw
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("mw_enable", "MW Enable", false));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo1_mw", "LFO 1 MW", false));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo2_mw", "LFO 2 MW", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("vel_mw", "Vel MW", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("at_mw", "AT MW", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("pb_mw", "PB MW", false));
 
     return { params.begin(), params.end() };
+}
+
+float Neon37AudioProcessor::getSyncMultiplier(int syncIndex)
+{
+    // Convert sync index (0-10) to time multiplier
+    // 0=1/64, 1=1/32, 2=1/16, 3=1/8, 4=1/4, 5=1/2, 6=1/1, 7=2/1, 8=3/1, 9=4/1, 10=8/1
+    constexpr float multipliers[] = { 1.0f/64.0f, 1.0f/32.0f, 1.0f/16.0f, 1.0f/8.0f, 1.0f/4.0f, 
+                                       1.0f/2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 8.0f };
+    if (syncIndex < 0 || syncIndex > 10)
+        return 1.0f;
+    return multipliers[syncIndex];
+}
+
+float Neon37AudioProcessor::generateLFOWaveform(float phase, int waveformType)
+{
+    // Normalize phase to 0-1
+    float normPhase = phase / juce::MathConstants<float>::twoPi;
+    normPhase = normPhase - std::floor(normPhase);
+    
+    switch (waveformType)
+    {
+        case 0: // Triangle
+            return 4.0f * std::abs(normPhase - 0.5f) - 1.0f;
+            
+        case 1: // Ramp Up (Sawtooth)
+            return 2.0f * normPhase - 1.0f;
+            
+        case 2: // Ramp Down
+            return 1.0f - 2.0f * normPhase;
+            
+        case 3: // Square
+            return normPhase < 0.5f ? 1.0f : -1.0f;
+            
+        case 4: // Sample & Hold
+        {
+            // Simple S&H: quantize to 32 steps per cycle
+            int step = (int)(normPhase * 32.0f);
+            // Generate deterministic pseudo-random value per step
+            uint32_t seed = step * 2654435761U;
+            seed = seed ^ (seed >> 16);
+            seed = seed * 73856093U;
+            return ((float)(seed & 0x7FFF) / 32767.5f) - 1.0f;
+        }
+        
+        default:
+            return 0.0f;
+    }
+}
+
+// === REFACTORED HELPERS FOR CLEANER CODE ===
+
+void Neon37AudioProcessor::calculateAllModulations(ModulationState& modState, float lfoFilterMod, float lfoPitchMod, float lfoAmpMod, float modWheelScale)
+{
+    // Convert LFO pitch modulation to semitones
+    float pitchModSemitones = lfoPitchMod * 12.0f * modWheelScale;
+    
+    // === VELOCITY MODULATION ===
+    float velPitchAmount = *apvts.getRawParameterValue("vel_pitch");
+    float velFilterAmount = *apvts.getRawParameterValue("vel_filter");
+    float velAmpAmount = *apvts.getRawParameterValue("vel_amp");
+    
+    float velPitchMod = velPitchAmount * currentVelocity;
+    float velFilterMod = velFilterAmount * currentVelocity;
+    float velAmpMod = velAmpAmount * currentVelocity;
+    
+    // === AFTERTOUCH MODULATION ===
+    float atPitchAmount = *apvts.getRawParameterValue("at_pitch");
+    float atFilterAmount = *apvts.getRawParameterValue("at_filter");
+    float atAmpAmount = *apvts.getRawParameterValue("at_amp");
+    
+    float atPitchMod = atPitchAmount * currentAftertouch;
+    float atFilterMod = atFilterAmount * currentAftertouch;
+    float atAmpMod = atAmpAmount * currentAftertouch;
+    
+    // === PITCH BEND MODULATION ===
+    float pbPitchAmount = *apvts.getRawParameterValue("pb_pitch");
+    float pbPitchMod = pbPitchAmount * pitchBendValue;
+    
+    // === COMBINE ALL MODULATIONS ===
+    modState.pitchModSemitones = pitchModSemitones + velPitchMod + atPitchMod + pbPitchMod;
+    
+    float totalFilterMod = (lfoFilterMod * modWheelScale) + velFilterMod + atFilterMod;
+    modState.totalFilterModMultiplier = 1.0f + juce::jlimit(-1.0f, 1.0f, totalFilterMod);
+    
+    float totalAmpMod = (lfoAmpMod * modWheelScale) + velAmpMod + atAmpMod;
+    modState.totalAmpModMultiplier = 1.0f + juce::jlimit(-1.0f, 1.0f, totalAmpMod);
+}
+
+float Neon37AudioProcessor::calculateModulatedCutoff(float baseCutoff, float filterEnvValue, float egDepth, float totalFilterModMultiplier, float /*resonance*/) const
+{
+    // Apply envelope modulation to cutoff
+    float egModulation = (egDepth / 100.0f) * filterEnvValue * 10.0f;
+    float modulatedCutoff = baseCutoff * std::pow(2.0f, egModulation);
+    
+    // Apply all filter modulations (LFO, velocity, aftertouch)
+    modulatedCutoff *= totalFilterModMultiplier;
+    modulatedCutoff = juce::jlimit(20.0f, 20000.0f, modulatedCutoff);
+    
+    return modulatedCutoff;
+}
+
+int Neon37AudioProcessor::allocateVoice()
+{
+    // Find an inactive voice or steal the oldest active one
+    int voiceToAllocate = -1;
+    for (int i = 0; i < MAX_VOICES; ++i)
+    {
+        if (!voices[i].active)
+        {
+            voiceToAllocate = i;
+            break;
+        }
+    }
+    
+    // If no inactive voice, steal the oldest one
+    if (voiceToAllocate == -1)
+    {
+        uint64_t oldestTimestamp = voices[0].allocationTimestamp;
+        voiceToAllocate = 0;
+        for (int i = 1; i < MAX_VOICES; ++i)
+        {
+            if (voices[i].allocationTimestamp < oldestTimestamp)
+            {
+                oldestTimestamp = voices[i].allocationTimestamp;
+                voiceToAllocate = i;
+            }
+        }
+    }
+    
+    return voiceToAllocate;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
