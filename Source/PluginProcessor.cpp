@@ -1073,7 +1073,7 @@ void Neon37AudioProcessor::calculateAllModulations(ModulationState& modState, fl
     modState.pitchModSemitones = pitchModSemitones + velPitchMod + atPitchMod + pbPitchMod;
     
     float totalFilterMod = (lfoFilterMod * modWheelScale) + velFilterMod + atFilterMod;
-    modState.totalFilterModMultiplier = 1.0f + juce::jlimit(-1.0f, 1.0f, totalFilterMod);
+    modState.totalFilterModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, totalFilterMod);
     
     float totalAmpMod = (lfoAmpMod * modWheelScale) + velAmpMod + atAmpMod;
     modState.totalAmpModMultiplier = 1.0f + juce::jlimit(-1.0f, 1.0f, totalAmpMod);
