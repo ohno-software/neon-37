@@ -498,6 +498,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     float baseCutoff = apvts.getRawParameterValue("cutoff")->load();
     float resonance = apvts.getRawParameterValue("resonance")->load();
     float egDepth = apvts.getRawParameterValue("eg_depth")->load();
+    float drive = apvts.getRawParameterValue("drive")->load();
     
     // Get master volume
     float masterVolDb = apvts.getRawParameterValue("master_volume")->load();
@@ -542,6 +543,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
             monoFilter.setCutoffFrequencyHz(modulatedCutoff);
             monoFilter.setResonance(resonance);
+            monoFilter.setDrive(drive);
             
             // Generate oscillator samples
             float osc1Sample = generateWaveform(osc1Phase, osc1Wave) * mixerOsc1;
@@ -687,6 +689,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
             monoFilter.setCutoffFrequencyHz(modulatedCutoff);
             monoFilter.setResonance(resonance);
+            monoFilter.setDrive(drive);
         }
         
         // Update tracking flag for next block's retrigger logic
@@ -760,6 +763,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
                 voices[voiceIdx].filter.setCutoffFrequencyHz(modulatedCutoff);
                 voices[voiceIdx].filter.setResonance(resonance);
+                voices[voiceIdx].filter.setDrive(drive);
             }
             
             // Apply per-voice filter
