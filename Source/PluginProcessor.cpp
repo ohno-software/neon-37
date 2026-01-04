@@ -131,10 +131,10 @@ void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
         // Separate from the shared monoAmpEnv envelope
         voices[i].ampGate.setSampleRate(sampleRate);
         juce::ADSR::Parameters gateParams;
-        gateParams.attack = 0.003f;   // 3ms attack (prevents clicks on note-on)
+        gateParams.attack = 0.0f;     // Instant on (gate doesn't shape, just switches)
         gateParams.decay = 0.0f;
         gateParams.sustain = 1.0f;
-        gateParams.release = 0.010f;  // 10ms release (lets ADSR release envelope breathe)
+        gateParams.release = 0.0f;    // Instant off (let envelope shape the release)
         voices[i].ampGate.setParameters(gateParams);
         
         // Per-voice filter (poly mode)
@@ -1020,7 +1020,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("key_track", "Key Track", 0.0f, 2.0f, 0.0f));
 
     // Envelope 1 (Filter/Mod) - Exponential time range 3ms to 10s
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_attack", "Env 1 Attack", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.003f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_attack", "Env 1 Attack", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.2f), 0.001f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_decay", "Env 1 Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_sustain", "Env 1 Sustain", 0.0f, 1.0f, 1.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env1_release", "Env 1 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
