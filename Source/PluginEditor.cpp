@@ -417,129 +417,57 @@ void Neon37AudioProcessorEditor::showInfoDialog(const juce::String& message)
 
 void Neon37AudioProcessorEditor::showSaveDialog()
 {
-    // Create a custom save dialog with rename capability using async approach
-    auto dialog = std::make_unique<juce::AlertWindow>("Save Patch", 
-                                                      "Enter patch name:",
-                                                      juce::AlertWindow::QuestionIcon);
+    juce::File presetsDir = audioProcessor.getPresetsDirectory();
     
-    dialog->addTextEditor("patchName", patchNameBox.getText().trim(), "Patch Name:");
+    fileChooser = std::make_unique<juce::FileChooser>("Save Patch", presetsDir, "*.xml");
     
-    dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    
-    auto* rawDialog = dialog.release();
-    rawDialog->enterModalState(true, juce::ModalCallbackFunction::create([this, rawDialog](int result)
-    {
-        if (result == 1)
-        {
-            juce::String patchName = rawDialog->getTextEditorContents("patchName").trim();
-            if (patchName.isEmpty())
+    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+        [this](const juce::FileChooser& fc) {
+            juce::File targetFile = fc.getResult();
+            if (targetFile != juce::File())
             {
-                showErrorDialog("Patch name cannot be empty");
-                delete rawDialog;
-                return;
+                if (!targetFile.getFileExtension().equalsIgnoreCase(".xml"))
+                    targetFile = targetFile.withFileExtension(".xml");
+                
+                if (audioProcessor.savePresetToFile(targetFile))
+                {
+                    juce::String displayName = targetFile.getFileNameWithoutExtension();
+                    patchNameBox.setText("   " + displayName);
+                    patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
+                    showInfoDialog("Patch saved: " + displayName);
+                }
+                else
+                {
+                    showErrorDialog("Failed to save patch");
+                }
             }
-            
-            juce::File presetsDir = audioProcessor.getPresetsDirectory();
-            juce::String filename = audioProcessor.filenameFromPatchName(patchName);
-            juce::File targetFile = presetsDir.getChildFile(filename);
-            
-            if (audioProcessor.savePresetToFile(targetFile))
-            {
-                patchNameBox.setText("   " + patchName);
-                patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
-                showInfoDialog("Patch saved successfully!\n\nName: " + patchName + "\nLocation: " + targetFile.getFullPathName());
-            }
-            else
-            {
-                showErrorDialog("Failed to save patch");
-            }
-        }
-        delete rawDialog;
-    }));
+        });
 }
 
 void Neon37AudioProcessorEditor::showLoadDialog()
 {
-    // Get all preset files
     juce::File presetsDir = audioProcessor.getPresetsDirectory();
-    juce::Array<juce::File> presetFiles = presetsDir.findChildFiles(juce::File::findFiles, false, "*.xml");
     
-    if (presetFiles.isEmpty())
-    {
-        showErrorDialog("No patches found in:\n" + presetsDir.getFullPathName());
-        return;
-    }
+    fileChooser = std::make_unique<juce::FileChooser>("Load Patch", presetsDir, "*.xml");
     
-    // Create a simple ListBoxModel
-    class PatchListBoxModel : public juce::ListBoxModel
-    {
-    public:
-        PatchListBoxModel(const juce::Array<juce::File>& files) : patchFiles(files) {}
-        
-        int getNumRows() override { return patchFiles.size(); }
-        
-        void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override
-        {
-            if (rowIsSelected)
-                g.fillAll(juce::Colour(0xFF00FFFF).withAlpha(0.3f));
-            else
-                g.fillAll(juce::Colour(0xFF2B3A45));
-            
-            g.setColour(juce::Colours::white);
-            g.setFont(16.0f);
-            
-            if (rowNumber < patchFiles.size())
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this](const juce::FileChooser& fc) {
+            if (fc.getResult().existsAsFile())
             {
-                juce::String patchName = patchFiles[rowNumber].getFileNameWithoutExtension();
-                g.drawText(patchName, 5, 0, width - 10, height, juce::Justification::centredLeft, true);
-            }
-        }
-        
-        juce::Array<juce::File> patchFiles;
-    };
-    
-    auto model = std::make_unique<PatchListBoxModel>(presetFiles);
-    auto listBox = std::make_unique<juce::ListBox>("Patches", model.get());
-    listBox->setRowHeight(30);
-    listBox->setSize(400, 200);
-    listBox->selectRow(0);
-    
-    // Create dialog
-    auto dialog = std::make_unique<juce::AlertWindow>("Load Patch", "Select a patch:", juce::AlertWindow::NoIcon);
-    dialog->addCustomComponent(listBox.get());
-    dialog->addButton("Load", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    
-    auto* rawDialog = dialog.release();
-    auto* rawListBox = listBox.release();
-    auto* rawModel = model.release();
-    
-    rawDialog->enterModalState(true, juce::ModalCallbackFunction::create([this, rawDialog, rawListBox, rawModel, presetFiles](int result)
-    {
-        if (result == 1)
-        {
-            int selectedIdx = rawListBox->getSelectedRow();
-            if (selectedIdx >= 0 && selectedIdx < presetFiles.size())
-            {
-                juce::File selectedFile = presetFiles[selectedIdx];
+                juce::File selectedFile = fc.getResult();
                 if (audioProcessor.loadPresetFromFile(selectedFile))
                 {
                     juce::String patchName = selectedFile.getFileNameWithoutExtension();
                     patchNameBox.setText("   " + patchName);
                     patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
-                    showInfoDialog("Patch loaded successfully!\n\nName: " + patchName);
+                    showInfoDialog("Patch loaded: " + patchName);
                 }
                 else
                 {
-                    showErrorDialog("Failed to load patch:\n" + selectedFile.getFullPathName());
+                    showErrorDialog("Failed to load patch");
                 }
             }
-        }
-        delete rawModel;
-        delete rawListBox;
-        delete rawDialog;
-    }));
+        });
 }
 
 void Neon37AudioProcessorEditor::resized()

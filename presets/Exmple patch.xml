@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Parameters>
+  <PARAM id="arp_on" value="0.0"/>
+  <PARAM id="at_amp" value="0.0"/>
+  <PARAM id="at_filter" value="0.0"/>
+  <PARAM id="at_pitch" value="0.0"/>
+  <PARAM id="cutoff" value="20000.0"/>
+  <PARAM id="drive" value="1.0"/>
+  <PARAM id="eg_depth" value="0.0"/>
+  <PARAM id="env1_attack" value="0.001000000047497451"/>
+  <PARAM id="env1_decay" value="0.05000000074505806"/>
+  <PARAM id="env1_release" value="0.05000000074505806"/>
+  <PARAM id="env1_sustain" value="1.0"/>
+  <PARAM id="env2_attack" value="0.003000000026077032"/>
+  <PARAM id="env2_decay" value="0.05000000074505806"/>
+  <PARAM id="env2_release" value="0.05000000074505806"/>
+  <PARAM id="env2_sustain" value="1.0"/>
+  <PARAM id="env_exp_curv" value="1.0"/>
+  <PARAM id="gliss_log" value="0.0"/>
+  <PARAM id="gliss_on_gat_leg" value="0.0"/>
+  <PARAM id="gliss_rte" value="0.0"/>
+  <PARAM id="gliss_time" value="0.0"/>
+  <PARAM id="gliss_tme" value="1.0"/>
+  <PARAM id="hard_sync" value="0.0"/>
+  <PARAM id="hold_mode" value="0.0"/>
+  <PARAM id="key_track" value="0.0"/>
+  <PARAM id="lfo1_amp" value="0.0"/>
+  <PARAM id="lfo1_filter" value="0.0"/>
+  <PARAM id="lfo1_mw" value="0.0"/>
+  <PARAM id="lfo1_pitch" value="0.0"/>
+  <PARAM id="lfo1_rate" value="0.09999999403953552"/>
+  <PARAM id="lfo1_sync" value="0.0"/>
+  <PARAM id="lfo1_sync_val" value="0.0"/>
+  <PARAM id="lfo1_wave" value="0.0"/>
+  <PARAM id="lfo2_amp" value="0.0"/>
+  <PARAM id="lfo2_filter" value="0.0"/>
+  <PARAM id="lfo2_mw" value="0.0"/>
+  <PARAM id="lfo2_pitch" value="0.0"/>
+  <PARAM id="lfo2_rate" value="0.09999999403953552"/>
+  <PARAM id="lfo2_sync" value="0.0"/>
+  <PARAM id="lfo2_sync_val" value="0.0"/>
+  <PARAM id="lfo2_wave" value="0.0"/>
+  <PARAM id="master_tune" value="440.0"/>
+  <PARAM id="master_volume" value="0.0"/>
+  <PARAM id="mixer_noise" value="-60.0"/>
+  <PARAM id="mixer_osc1" value="0.0"/>
+  <PARAM id="mixer_osc2" value="-60.0"/>
+  <PARAM id="mixer_return" value="-60.0"/>
+  <PARAM id="mixer_sub1" value="-60.0"/>
+  <PARAM id="mw_enable" value="0.0"/>
+  <PARAM id="osc1_fine" value="0.0"/>
+  <PARAM id="osc1_octave" value="0.0"/>
+  <PARAM id="osc1_semitones" value="0.0"/>
+  <PARAM id="osc1_wave" value="2.0"/>
+  <PARAM id="osc2_fine" value="0.0"/>
+  <PARAM id="osc2_octave" value="0.0"/>
+  <PARAM id="osc2_semitones" value="0.0"/>
+  <PARAM id="osc2_wave" value="2.0"/>
+  <PARAM id="osc_beat" value="0.0"/>
+  <PARAM id="osc_freq" value="0.0"/>
+  <PARAM id="pb_pitch" value="2.0"/>
+  <PARAM id="resonance" value="0.0"/>
+  <PARAM id="vel_amp" value="0.0"/>
+  <PARAM id="vel_filter" value="0.0"/>
+  <PARAM id="vel_pitch" value="0.0"/>
+  <PARAM id="voice_mode" value="0.0"/>
+  <PARAM id="mw_amp"/>
+  <PARAM id="mw_filter" value="0.0"/>
+  <PARAM id="mw_pitch"/>
+  <PARAM id="pb_amp"/>
+  <PARAM id="pb_filter"/>
+</Parameters>

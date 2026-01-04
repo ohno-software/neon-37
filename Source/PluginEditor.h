@@ -30,6 +30,7 @@ private:
     juce::TextButton savePatchBtn{"SAVE"};
     juce::TextButton loadPatchBtn{"LOAD"};
     juce::TextButton newPatchBtn{"NEW"};
+    std::unique_ptr<juce::FileChooser> fileChooser;
     
     // Parameter value tooltip display
     juce::Label parameterValueTooltip;

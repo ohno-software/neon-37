@@ -377,7 +377,20 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             }
             else if (voiceMode == 4)  // Poly mode
             {
-                // Allocate voice (refactored into helper)
+                // If this note is already playing, stop the old voice immediately
+                for (int i = 0; i < MAX_VOICES; ++i)
+                {
+                    if (voices[i].active && voices[i].midiNote == midiNote)
+                    {
+                        // Force the old voice to stop immediately (don't just noteOff, fully deactivate)
+                        voices[i].active = false;
+                        voices[i].ampEnv.noteOff();
+                        voices[i].filterEnv.noteOff();
+                        break;
+                    }
+                }
+                
+                // Allocate voice for the new trigger
                 int voiceToAllocate = allocateVoice();
                 
                 // Allocate voice
