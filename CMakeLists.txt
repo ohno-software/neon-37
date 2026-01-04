@@ -2,12 +2,19 @@ cmake_minimum_required(VERSION 3.15)
 
 project(Neon37 VERSION 0.0.1)
 
+find_package(Git REQUIRED)
+
 # Fetch JUCE
 include(FetchContent)
 FetchContent_Declare(
     juce
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
     GIT_TAG        7.0.5 # Or latest stable
+    PATCH_COMMAND  ${CMAKE_COMMAND}
+        -DSOURCE_DIR=<SOURCE_DIR>
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/cmake/juce-ladderfilter-smoothing.patch
+        -P ${CMAKE_CURRENT_LIST_DIR}/cmake/apply_patch_if_needed.cmake
 )
 FetchContent_MakeAvailable(juce)
 
@@ -37,6 +44,7 @@ target_compile_definitions(Neon37
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_LADDERFILTER_SMOOTHER_RAMP_TIME_SEC=0.0
 )
 
 target_link_libraries(Neon37

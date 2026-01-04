@@ -1,0 +1,19 @@
+diff --git a/modules/juce_dsp/widgets/juce_LadderFilter.cpp b/modules/juce_dsp/widgets/juce_LadderFilter.cpp
+index 4a27fd0..f9b9d2c 100644
+--- a/modules/juce_dsp/widgets/juce_LadderFilter.cpp
++++ b/modules/juce_dsp/widgets/juce_LadderFilter.cpp
+@@ -162,7 +162,12 @@ void LadderFilter<SampleType>::setSampleRate (SampleType newValue) noexcept
+     jassert (newValue > SampleType (0));
+     cutoffFreqScaler = SampleType (-2.0 * juce::MathConstants<double>::pi) / newValue;
+ 
+-    static constexpr SampleType smootherRampTimeSec = SampleType (0.05);
++#ifndef JUCE_LADDERFILTER_SMOOTHER_RAMP_TIME_SEC
++ #define JUCE_LADDERFILTER_SMOOTHER_RAMP_TIME_SEC 0.05
++#endif
++
++    static constexpr SampleType smootherRampTimeSec = SampleType (JUCE_LADDERFILTER_SMOOTHER_RAMP_TIME_SEC);
++
+     cutoffTransformSmoother.reset (newValue, smootherRampTimeSec);
+     scaledResonanceSmoother.reset (newValue, smootherRampTimeSec);
+ 
+     updateCutoffFreq();
