@@ -296,6 +296,29 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
                     monoFilter.reset();  // Reset filter smoothing state for instant response
+                    
+                    // Pre-set filter to initial envelope value to eliminate attack lag
+                    // When envelope attack is fast, snap filter to starting position
+                    float env1Attack = apvts.getRawParameterValue("env1_attack")->load();
+                    if (env1Attack < 0.005f)  // If attack < 5ms, snap immediately
+                    {
+                        float initialEnvValue = 0.0f;  // Envelope starts at 0
+                        float egDepth = apvts.getRawParameterValue("eg_depth")->load();
+                        float baseCutoff = apvts.getRawParameterValue("cutoff")->load();
+                        float resonance = apvts.getRawParameterValue("resonance")->load();
+                        
+                        // Calculate modulations
+                        float velFilterAmount = *apvts.getRawParameterValue("vel_filter");
+                        float atFilterAmount = *apvts.getRawParameterValue("at_filter");
+                        float velFilterMod = velFilterAmount * currentVelocity;
+                        float atFilterMod = atFilterAmount * currentAftertouch;
+                        float totalFilterMod = velFilterMod + atFilterMod;
+                        float totalFilterModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, totalFilterMod);
+                        
+                        float initialCutoff = calculateModulatedCutoff(baseCutoff, initialEnvValue, egDepth, totalFilterModMultiplier, resonance);
+                        monoFilter.setCutoffFrequencyHz(initialCutoff);
+                        monoFilter.setResonance(resonance);
+                    }
                 }
             }
             else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes (Para-L, Para)
@@ -328,6 +351,27 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
                     monoFilter.reset();  // Reset filter smoothing state for instant response
+                    
+                    // Pre-set filter to initial envelope value to eliminate attack lag
+                    float env1Attack = apvts.getRawParameterValue("env1_attack")->load();
+                    if (env1Attack < 0.005f)  // If attack < 5ms, snap immediately
+                    {
+                        float initialEnvValue = 0.0f;
+                        float egDepth = apvts.getRawParameterValue("eg_depth")->load();
+                        float baseCutoff = apvts.getRawParameterValue("cutoff")->load();
+                        float resonance = apvts.getRawParameterValue("resonance")->load();
+                        
+                        float velFilterAmount = *apvts.getRawParameterValue("vel_filter");
+                        float atFilterAmount = *apvts.getRawParameterValue("at_filter");
+                        float velFilterMod = velFilterAmount * currentVelocity;
+                        float atFilterMod = atFilterAmount * currentAftertouch;
+                        float totalFilterMod = velFilterMod + atFilterMod;
+                        float totalFilterModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, totalFilterMod);
+                        
+                        float initialCutoff = calculateModulatedCutoff(baseCutoff, initialEnvValue, egDepth, totalFilterModMultiplier, resonance);
+                        monoFilter.setCutoffFrequencyHz(initialCutoff);
+                        monoFilter.setResonance(resonance);
+                    }
                 }
             }
             else if (voiceMode == 4)  // Poly mode
@@ -1015,10 +1059,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("mixer_return", "Mixer Return", juce::NormalisableRange<float> (-60.0f, 10.0f, 0.1f, 2.0f), -60.0f));
 
     // Filter
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("cutoff", "Cutoff", juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 2000.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("cutoff", "Cutoff", juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 20000.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("resonance", "Resonance", 0.0f, 1.2f, 0.0f)); // Up to 1.2 for self-oscillation
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("drive", "Drive", 1.0f, 25.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f, 1.0f), 50.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f, 1.0f), 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("key_track", "Key Track", 0.0f, 2.0f, 0.0f));
 
     // Envelope 1 (Filter/Mod) - Exponential time range 3ms to 10s
