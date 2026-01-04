@@ -79,6 +79,14 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Preset management (.xml files)
+    bool savePresetToFile (const juce::File& file);
+    bool loadPresetFromFile (const juce::File& file);
+    juce::String getPresetFileExtension() const { return ".xml"; }
+    juce::File getPresetsDirectory() const;
+    juce::String filenameFromPatchName (const juce::String& patchName) const;
+    void resetToDefaults();
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
@@ -116,10 +124,11 @@ private:
     float modWheelValue = 0.0f;  // 0-1, from MIDI CC1 (defaults to 0 when enabled, forced to 1 when disabled)
     bool modWheelEnabled = false;
     
-    // Velocity and Aftertouch tracking
+    // Velocity, Aftertouch, and Mod Wheel tracking
     float currentVelocity = 0.0f;  // 0-1, from MIDI note-on velocity
     float currentAftertouch = 0.0f;  // 0-1, from MIDI channel aftertouch (CC176)
     float pitchBendValue = 0.0f;  // -1 to +1, from MIDI pitch bend
+    float modWheelValueRaw = 0.0f;  // 0-1, from MIDI CC1 (raw mod wheel value, separate from modWheelValue which is used for LFO scaling)
     
     // Helper function to generate waveform samples
     float generateWaveform(float phase, int waveformType);

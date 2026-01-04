@@ -87,8 +87,15 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     modBottomSection.addAndMakeVisible(atFilter);
     modBottomSection.addAndMakeVisible(atAmp);
 
+    modBottomSection.addAndMakeVisible(mwLabel);
+    modBottomSection.addAndMakeVisible(mwPitch);
+    modBottomSection.addAndMakeVisible(mwFilter);
+    modBottomSection.addAndMakeVisible(mwAmp);
+
     modBottomSection.addAndMakeVisible(pbLabel);
     modBottomSection.addAndMakeVisible(pbPitch);
+    modBottomSection.addAndMakeVisible(pbFilter);
+    modBottomSection.addAndMakeVisible(pbAmp);
     
     masterSection.addAndMakeVisible(masterVolume);
     masterSection.addAndMakeVisible(masterFreq);
@@ -283,8 +290,19 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     atAmpAttach = std::make_unique<SliderAttachment>(apvts, "at_amp", atAmp.slider);
     setupKnob(atAmp, "at_amp");
 
+    mwPitchAttach = std::make_unique<SliderAttachment>(apvts, "mw_pitch", mwPitch.slider);
+    setupKnob(mwPitch, "mw_pitch");
+    mwFilterAttach = std::make_unique<SliderAttachment>(apvts, "mw_filter", mwFilter.slider);
+    setupKnob(mwFilter, "mw_filter");
+    mwAmpAttach = std::make_unique<SliderAttachment>(apvts, "mw_amp", mwAmp.slider);
+    setupKnob(mwAmp, "mw_amp");
+
     pbPitchAttach = std::make_unique<SliderAttachment>(apvts, "pb_pitch", pbPitch.slider);
     setupKnob(pbPitch, "pb_pitch");
+    pbFilterAttach = std::make_unique<SliderAttachment>(apvts, "pb_filter", pbFilter.slider);
+    setupKnob(pbFilter, "pb_filter");
+    pbAmpAttach = std::make_unique<SliderAttachment>(apvts, "pb_amp", pbAmp.slider);
+    setupKnob(pbAmp, "pb_amp");
 
     lfo1MwAttach = std::make_unique<ButtonAttachment>(apvts, "mw_enable", lfo1MwBtn);  // Global MW Enable
     lfo2MwAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_mw", lfo2MwBtn);
@@ -300,7 +318,45 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     
     tooltipTimer.onTimeout = [this] { hideParameterTooltip(); };
 
-    setSize (1300, 750);
+    // Setup Patch Management Section
+    addAndMakeVisible(patchManagementSection);
+    
+    patchManagementSection.addAndMakeVisible(patchNameBox);
+    patchNameBox.setFont(juce::Font(32.0f, juce::Font::bold));
+    patchNameBox.setColour(juce::TextEditor::textColourId, juce::Colours::white);
+    patchNameBox.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xFF2B3A45));
+    patchNameBox.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xFF00FFFF).withAlpha(0.6f));
+    patchNameBox.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xFF00FFFF));
+    patchNameBox.setBorder(juce::BorderSize<int>(2));
+    patchNameBox.setInputRestrictions(256, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_()[].");
+    patchNameBox.setReturnKeyStartsNewLine(false);
+    patchNameBox.setText("   Untitled Patch");
+    patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
+    
+    patchManagementSection.addAndMakeVisible(savePatchBtn);
+    savePatchBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF00FFFF).withAlpha(0.3f));
+    savePatchBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF00FFFF));
+    savePatchBtn.setButtonText("SAVE");
+    savePatchBtn.onClick = [this] { showSaveDialog(); };
+    
+    patchManagementSection.addAndMakeVisible(loadPatchBtn);
+    loadPatchBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF00FFFF).withAlpha(0.3f));
+    loadPatchBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF00FFFF));
+    loadPatchBtn.setButtonText("LOAD");
+    loadPatchBtn.onClick = [this] { showLoadDialog(); }; 
+    
+    patchManagementSection.addAndMakeVisible(newPatchBtn);
+    newPatchBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF00FFFF).withAlpha(0.3f));
+    newPatchBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF00FFFF));
+    newPatchBtn.setButtonText("NEW");
+    newPatchBtn.onClick = [this] { 
+        DBG("New button clicked");
+        audioProcessor.resetToDefaults();
+        patchNameBox.setText("   Untitled Patch");
+        patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
+    };
+
+    setSize (1300, 850);
 }
 
 Neon37AudioProcessorEditor::~Neon37AudioProcessorEditor()
@@ -339,9 +395,172 @@ void Neon37AudioProcessorEditor::hideParameterTooltip()
     tooltipTimer.stopTimer();
 }
 
+void Neon37AudioProcessorEditor::showErrorDialog(const juce::String& errorMessage)
+{
+    // Show error dialog with plain text that can be copied
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                          "Error",
+                                          errorMessage,
+                                          "OK",
+                                          this);
+}
+
+void Neon37AudioProcessorEditor::showInfoDialog(const juce::String& message)
+{
+    // Show info dialog with plain text that can be copied
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                          "Success",
+                                          message,
+                                          "OK",
+                                          this);
+}
+
+void Neon37AudioProcessorEditor::showSaveDialog()
+{
+    // Create a custom save dialog with rename capability using async approach
+    auto dialog = std::make_unique<juce::AlertWindow>("Save Patch", 
+                                                      "Enter patch name:",
+                                                      juce::AlertWindow::QuestionIcon);
+    
+    dialog->addTextEditor("patchName", patchNameBox.getText().trim(), "Patch Name:");
+    
+    dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    
+    auto* rawDialog = dialog.release();
+    rawDialog->enterModalState(true, juce::ModalCallbackFunction::create([this, rawDialog](int result)
+    {
+        if (result == 1)
+        {
+            juce::String patchName = rawDialog->getTextEditorContents("patchName").trim();
+            if (patchName.isEmpty())
+            {
+                showErrorDialog("Patch name cannot be empty");
+                delete rawDialog;
+                return;
+            }
+            
+            juce::File presetsDir = audioProcessor.getPresetsDirectory();
+            juce::String filename = audioProcessor.filenameFromPatchName(patchName);
+            juce::File targetFile = presetsDir.getChildFile(filename);
+            
+            if (audioProcessor.savePresetToFile(targetFile))
+            {
+                patchNameBox.setText("   " + patchName);
+                patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
+                showInfoDialog("Patch saved successfully!\n\nName: " + patchName + "\nLocation: " + targetFile.getFullPathName());
+            }
+            else
+            {
+                showErrorDialog("Failed to save patch");
+            }
+        }
+        delete rawDialog;
+    }));
+}
+
+void Neon37AudioProcessorEditor::showLoadDialog()
+{
+    // Get all preset files
+    juce::File presetsDir = audioProcessor.getPresetsDirectory();
+    juce::Array<juce::File> presetFiles = presetsDir.findChildFiles(juce::File::findFiles, false, "*.xml");
+    
+    if (presetFiles.isEmpty())
+    {
+        showErrorDialog("No patches found in:\n" + presetsDir.getFullPathName());
+        return;
+    }
+    
+    // Create a simple ListBoxModel
+    class PatchListBoxModel : public juce::ListBoxModel
+    {
+    public:
+        PatchListBoxModel(const juce::Array<juce::File>& files) : patchFiles(files) {}
+        
+        int getNumRows() override { return patchFiles.size(); }
+        
+        void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override
+        {
+            if (rowIsSelected)
+                g.fillAll(juce::Colour(0xFF00FFFF).withAlpha(0.3f));
+            else
+                g.fillAll(juce::Colour(0xFF2B3A45));
+            
+            g.setColour(juce::Colours::white);
+            g.setFont(16.0f);
+            
+            if (rowNumber < patchFiles.size())
+            {
+                juce::String patchName = patchFiles[rowNumber].getFileNameWithoutExtension();
+                g.drawText(patchName, 5, 0, width - 10, height, juce::Justification::centredLeft, true);
+            }
+        }
+        
+        juce::Array<juce::File> patchFiles;
+    };
+    
+    auto model = std::make_unique<PatchListBoxModel>(presetFiles);
+    auto listBox = std::make_unique<juce::ListBox>("Patches", model.get());
+    listBox->setRowHeight(30);
+    listBox->setSize(400, 200);
+    listBox->selectRow(0);
+    
+    // Create dialog
+    auto dialog = std::make_unique<juce::AlertWindow>("Load Patch", "Select a patch:", juce::AlertWindow::NoIcon);
+    dialog->addCustomComponent(listBox.get());
+    dialog->addButton("Load", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    
+    auto* rawDialog = dialog.release();
+    auto* rawListBox = listBox.release();
+    auto* rawModel = model.release();
+    
+    rawDialog->enterModalState(true, juce::ModalCallbackFunction::create([this, rawDialog, rawListBox, rawModel, presetFiles](int result)
+    {
+        if (result == 1)
+        {
+            int selectedIdx = rawListBox->getSelectedRow();
+            if (selectedIdx >= 0 && selectedIdx < presetFiles.size())
+            {
+                juce::File selectedFile = presetFiles[selectedIdx];
+                if (audioProcessor.loadPresetFromFile(selectedFile))
+                {
+                    juce::String patchName = selectedFile.getFileNameWithoutExtension();
+                    patchNameBox.setText("   " + patchName);
+                    patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
+                    showInfoDialog("Patch loaded successfully!\n\nName: " + patchName);
+                }
+                else
+                {
+                    showErrorDialog("Failed to load patch:\n" + selectedFile.getFullPathName());
+                }
+            }
+        }
+        delete rawModel;
+        delete rawListBox;
+        delete rawDialog;
+    }));
+}
+
 void Neon37AudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds().reduced(15);
+    auto area = getLocalBounds();
+    
+    // Patch Management Section - Full width at top
+    auto patchArea = area.removeFromTop(90);
+    patchManagementSection.setBounds(patchArea);
+    
+    auto patchContent = patchArea.reduced(10);
+    auto patchNameArea = patchContent.removeFromLeft(patchContent.getWidth() - 280);
+    patchNameBox.setBounds(patchNameArea);
+    
+    auto buttonArea = patchContent;
+    savePatchBtn.setBounds(buttonArea.removeFromLeft(85).reduced(2));
+    loadPatchBtn.setBounds(buttonArea.removeFromLeft(85).reduced(2));
+    newPatchBtn.setBounds(buttonArea.removeFromLeft(85).reduced(2));
+    
+    // Remaining area for main UI (shifted down by 90 pixels)
+    area.reduce(15, 15);
     
     // Master section - wider for better readability
     auto masterArea = area.removeFromLeft(130);
@@ -421,35 +640,48 @@ void Neon37AudioProcessorEditor::resized()
         k3.setBounds(controls.removeFromLeft(knobW));
     };
 
-    auto rowH = modBArea.getHeight() / 5;
+    auto rowH = modBArea.getHeight() / 6;  // Now 6 rows: LFO1, LFO2, Vel, AT, MW, PB
     layoutModRow(modBArea.removeFromTop(rowH), lfo1Label, nullptr, lfo1Pitch, lfo1Filter, lfo1Amp, lfo1MwBtn);
     layoutModRow(modBArea.removeFromTop(rowH), lfo2Label, nullptr, lfo2Pitch, lfo2Filter, lfo2Amp, lfo2MwBtn);
     
-    // Velocity row - no MW button
+    // Velocity row - compact
     {
         auto row = modBArea.removeFromTop(rowH);
-        velLabel.setBounds(row.removeFromTop(20));
+        velLabel.setBounds(row.removeFromTop(15));
         auto knobW = row.getWidth() / 3;
         velPitch.setBounds(row.removeFromLeft(knobW));
         velFilter.setBounds(row.removeFromLeft(knobW));
         velAmp.setBounds(row.removeFromLeft(knobW));
     }
     
-    // Aftertouch row - no MW button
+    // Aftertouch row - compact
     {
         auto row = modBArea.removeFromTop(rowH);
-        atLabel.setBounds(row.removeFromTop(20));
+        atLabel.setBounds(row.removeFromTop(15));
         auto knobW = row.getWidth() / 3;
         atPitch.setBounds(row.removeFromLeft(knobW));
         atFilter.setBounds(row.removeFromLeft(knobW));
         atAmp.setBounds(row.removeFromLeft(knobW));
     }
     
-    // Pitch Bend row - only pitch control
+    // Mod Wheel row - compact
     {
         auto row = modBArea.removeFromTop(rowH);
-        pbLabel.setBounds(row.removeFromTop(20));
-        pbPitch.setBounds(row.removeFromLeft(row.getWidth()));
+        mwLabel.setBounds(row.removeFromTop(15));
+        auto knobW = row.getWidth() / 3;
+        mwPitch.setBounds(row.removeFromLeft(knobW));
+        mwFilter.setBounds(row.removeFromLeft(knobW));
+        mwAmp.setBounds(row.removeFromLeft(knobW));
+    }
+    
+    // Pitch Bend row - 3 knobs (Pitch, Filter, Amp)
+    {
+        auto row = modBArea.removeFromTop(rowH);
+        pbLabel.setBounds(row.removeFromTop(15));
+        auto knobW = row.getWidth() / 3;
+        pbPitch.setBounds(row.removeFromLeft(knobW));
+        pbFilter.setBounds(row.removeFromLeft(knobW));
+        pbAmp.setBounds(row.removeFromLeft(knobW));
     }
     
     // Layout knobs within sections - split oscillator section in half

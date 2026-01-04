@@ -216,6 +216,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (msg.isController() && msg.getControllerNumber() == 1)  // CC1 = Mod Wheel
         {
             modWheelValue = msg.getControllerValue() / 127.0f;  // Normalize to 0-1
+            modWheelValueRaw = modWheelValue;  // Store raw value for Mod Wheel modulation routing
             continue;  // Skip to next message
         }
         
@@ -1018,12 +1019,94 @@ juce::AudioProcessorEditor* Neon37AudioProcessor::createEditor()
 
 void Neon37AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    juce::ignoreUnused(destData);
+    // Save current state to MemoryBlock (used by DAW for project save)
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void Neon37AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    juce::ignoreUnused(data, sizeInBytes);
+    // Restore state from MemoryBlock (used by DAW for project load)
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState.get() != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
+
+bool Neon37AudioProcessor::savePresetToFile (const juce::File& file)
+{
+    // Save current state to .json preset file
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    
+    if (xml != nullptr)
+    {
+        // Save as plain text with .json extension
+        juce::File targetFile = file.withFileExtension (getPresetFileExtension());
+        juce::String xmlString = xml->toString();
+        return targetFile.replaceWithText (xmlString);
+    }
+    
+    return false;
+}
+
+bool Neon37AudioProcessor::loadPresetFromFile (const juce::File& file)
+{
+    // Load preset from .json file
+    if (!file.existsAsFile())
+        return false;
+    
+    std::unique_ptr<juce::XmlElement> xml = juce::XmlDocument::parse (file);
+    
+    if (xml != nullptr && xml->hasTagName (apvts.state.getType()))
+    {
+        apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        return true;
+    }
+    
+    return false;
+}
+
+juce::File Neon37AudioProcessor::getPresetsDirectory() const
+{
+    // Get .neonaudio/neon37/patches directory
+    juce::File appDataDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    juce::File presetsDir = appDataDir.getChildFile(".neonaudio").getChildFile("neon37").getChildFile("patches");
+    
+    // Create directory if it doesn't exist
+    if (!presetsDir.exists())
+    {
+        presetsDir.createDirectory();
+    }
+    
+    return presetsDir;
+}
+
+juce::String Neon37AudioProcessor::filenameFromPatchName (const juce::String& patchName) const
+{
+    // Convert patch name to valid filename (trim, add extension)
+    juce::String filename = patchName.trim();
+    if (filename.isEmpty())
+        filename = "Untitled";
+    return filename + getPresetFileExtension();
+}
+
+void Neon37AudioProcessor::resetToDefaults()
+{
+    // Reset all parameters to their default values
+    auto state = apvts.state;
+    for (auto child : state)
+    {
+        if (child.hasProperty(juce::Identifier("value")))
+        {
+            // Get the parameter to find its default
+            if (auto* param = apvts.getParameter(child.getProperty(juce::Identifier("id")).toString()))
+            {
+                param->setValueNotifyingHost(param->getDefaultValue());
+            }
+        }
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::createParameterLayout()
@@ -1118,8 +1201,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_filter", "AT Filter", -5.0f, 5.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("at_amp", "AT Amp", -2.0f, 2.0f, 0.0f));
 
-    // Pitch Bend - Pitch: 1-12 semitones (snap), no filter/amp
+    // Pitch Bend - Pitch: 1-12 semitones (snap), Filter and Amp: -200% to +500% (continuous)
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_pitch", "PB Pitch", juce::NormalisableRange<float>(1.0f, 12.0f, 1.0f), 2.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_filter", "PB Filter", -5.0f, 5.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("pb_amp", "PB Amp", -2.0f, 2.0f, 0.0f));
+
+    // Mod Wheel - Pitch: -12 to +12 semitones (snap), Filter and Amp: -200% to +500% (continuous)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("mw_pitch", "MW Pitch", juce::NormalisableRange<float>(-12.0f, 12.0f, 1.0f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("mw_filter", "MW Filter", -5.0f, 5.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("mw_amp", "MW Amp", -2.0f, 2.0f, 0.0f));
 
     // Mod Wheel Toggles - removed vel_mw, at_mw, pb_mw
     params.push_back (std::make_unique<juce::AudioParameterBool> ("mw_enable", "MW Enable", false));
@@ -1201,17 +1291,31 @@ void Neon37AudioProcessor::calculateAllModulations(ModulationState& modState, fl
     float atFilterMod = atFilterAmount * currentAftertouch;
     float atAmpMod = atAmpAmount * currentAftertouch;
     
+    // === MOD WHEEL MODULATION ===
+    float mwPitchAmount = *apvts.getRawParameterValue("mw_pitch");
+    float mwFilterAmount = *apvts.getRawParameterValue("mw_filter");
+    float mwAmpAmount = *apvts.getRawParameterValue("mw_amp");
+    
+    float mwPitchMod = mwPitchAmount * modWheelValueRaw;
+    float mwFilterMod = mwFilterAmount * modWheelValueRaw;
+    float mwAmpMod = mwAmpAmount * modWheelValueRaw;
+    
     // === PITCH BEND MODULATION ===
     float pbPitchAmount = *apvts.getRawParameterValue("pb_pitch");
+    float pbFilterAmount = *apvts.getRawParameterValue("pb_filter");
+    float pbAmpAmount = *apvts.getRawParameterValue("pb_amp");
+    
     float pbPitchMod = pbPitchAmount * pitchBendValue;
+    float pbFilterMod = pbFilterAmount * pitchBendValue;
+    float pbAmpMod = pbAmpAmount * pitchBendValue;
     
     // === COMBINE ALL MODULATIONS ===
-    modState.pitchModSemitones = pitchModSemitones + velPitchMod + atPitchMod + pbPitchMod;
+    modState.pitchModSemitones = pitchModSemitones + velPitchMod + atPitchMod + mwPitchMod + pbPitchMod;
     
-    float totalFilterMod = (lfoFilterMod * modWheelScale) + velFilterMod + atFilterMod;
+    float totalFilterMod = (lfoFilterMod * modWheelScale) + velFilterMod + atFilterMod + mwFilterMod + pbFilterMod;
     modState.totalFilterModMultiplier = 1.0f + juce::jlimit(-5.0f, 5.0f, totalFilterMod);
     
-    float totalAmpMod = (lfoAmpMod * modWheelScale) + velAmpMod + atAmpMod;
+    float totalAmpMod = (lfoAmpMod * modWheelScale) + velAmpMod + atAmpMod + mwAmpMod + pbAmpMod;
     modState.totalAmpModMultiplier = 1.0f + juce::jlimit(-1.0f, 1.0f, totalAmpMod);
 }
 
