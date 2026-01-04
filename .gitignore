@@ -26,6 +26,10 @@ cmake_install.cmake
 Makefile
 *.cmake
 
+# Allow repo-managed CMake helper scripts
+!cmake/*.cmake
+!cmake/**/*.cmake
+
 # OS files
 .DS_Store
 Thumbs.db
