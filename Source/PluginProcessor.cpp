@@ -295,6 +295,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 {
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
+                    monoFilter.reset();  // Reset filter smoothing state for instant response
                 }
             }
             else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes (Para-L, Para)
@@ -326,6 +327,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 {
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
+                    monoFilter.reset();  // Reset filter smoothing state for instant response
                 }
             }
             else if (voiceMode == 4)  // Poly mode
