@@ -1016,7 +1016,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("cutoff", "Cutoff", juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 20000.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("resonance", "Resonance", 0.0f, 1.2f, 0.0f)); // Up to 1.2 for self-oscillation
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("drive", "Drive", 1.0f, 25.0f, 1.0f));
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f, 1.0f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("eg_depth", "EG Depth", juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f, 1.0f), 50.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("key_track", "Key Track", 0.0f, 2.0f, 0.0f));
 
     // Envelope 1 (Filter/Mod) - Exponential time range 3ms to 10s
