@@ -14,11 +14,22 @@ public:
     
     void showParameterTooltip(const juce::String& text, juce::Component* source);
     void hideParameterTooltip();
+    void showErrorDialog(const juce::String& errorMessage);
+    void showInfoDialog(const juce::String& message);
+    void showSaveDialog();
+    void showLoadDialog();
 
 private:
     Neon37AudioProcessor& audioProcessor;
     CustomLookAndFeel customLookAndFeel;
     juce::TooltipWindow tooltipWindow{this, 700};
+    
+    // Patch Management Section
+    juce::Component patchManagementSection;
+    juce::TextEditor patchNameBox;
+    juce::TextButton savePatchBtn{"SAVE"};
+    juce::TextButton loadPatchBtn{"LOAD"};
+    juce::TextButton newPatchBtn{"NEW"};
     
     // Parameter value tooltip display
     juce::Label parameterValueTooltip;
@@ -340,11 +351,12 @@ private:
 
     Knob velPitch{"PITCH"}, velFilter{"FILTER"}, velAmp{"AMP"};
     Knob atPitch{"PITCH"}, atFilter{"FILTER"}, atAmp{"AMP"};
+    Knob mwPitch{"PITCH"}, mwFilter{"FILTER"}, mwAmp{"AMP"};
     Knob pbPitch{"PITCH"}, pbFilter{"FILTER"}, pbAmp{"AMP"};
     
-    SmallButton lfo1MwBtn{"MW"}, lfo2MwBtn{"MW"}, velMwBtn{"MW"}, atMwBtn{"MW"}, pbMwBtn{"MW"};
+    SmallButton lfo1MwBtn{"MW"}, lfo2MwBtn{"MW"}, velMwBtn{"MW"}, atMwBtn{"MW"}, mwMwBtn{"MW"}, pbMwBtn{"MW"};
     
-    juce::Label lfo1Label{"", "LFO 1"}, lfo2Label{"", "LFO 2"}, velLabel{"", "VELOCITY"}, atLabel{"", "AFTERTOUCH"}, pbLabel{"", "PITCH BEND"};
+    juce::Label lfo1Label{"", "LFO 1"}, lfo2Label{"", "LFO 2"}, velLabel{"", "VELOCITY"}, atLabel{"", "AFTERTOUCH"}, mwLabel{"", "MOD WHEEL"}, pbLabel{"", "PITCH BEND"};
     
     Section masterSection{"MASTER"};
     Knob glissTime{"TIME"};
@@ -398,8 +410,9 @@ private:
 
     std::unique_ptr<SliderAttachment> velPitchAttach, velFilterAttach, velAmpAttach;
     std::unique_ptr<SliderAttachment> atPitchAttach, atFilterAttach, atAmpAttach;
+    std::unique_ptr<SliderAttachment> mwPitchAttach, mwFilterAttach, mwAmpAttach;
     std::unique_ptr<SliderAttachment> pbPitchAttach, pbFilterAttach, pbAmpAttach;
-    std::unique_ptr<ButtonAttachment> lfo1MwAttach, lfo2MwAttach, velMwAttach, atMwAttach, pbMwAttach;
+    std::unique_ptr<ButtonAttachment> lfo1MwAttach, lfo2MwAttach, velMwAttach, atMwAttach, mwMwAttach, pbMwAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Neon37AudioProcessorEditor)
 };
