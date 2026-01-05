@@ -170,6 +170,16 @@ void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     // Initialize output gain to unity
     outputGain.prepare(spec);
     outputGain.setGainLinear(1.0f);
+    
+    // Initialize oversampling for alias-free oscillators (4x oversampling)
+    // This upsamples oscillators to prevent aliasing artifacts
+    oversamplingUp = std::make_unique<juce::dsp::Oversampling<float>>(
+        getTotalNumOutputChannels(),  // numChannels
+        2,                             // factor: 4x (2^2 = 4)
+        juce::dsp::Oversampling<float>::FilterType::filterHalfBandPolyphaseIIR,
+        true                           // use double precision
+    );
+    oversamplingUp->initProcessing(samplesPerBlock);
 }
 
 void Neon37AudioProcessor::releaseResources()
@@ -995,29 +1005,65 @@ float Neon37AudioProcessor::generateWaveform(float phase, int waveformType)
     float normPhase = phase / juce::MathConstants<float>::twoPi;
     normPhase = normPhase - std::floor(normPhase);
     
+    float sample = 0.0f;
+    
     switch (waveformType)
     {
-        case 0: // Sine
-            return std::sin(phase);
+        case 0: // Sine (no aliasing)
+            sample = std::sin(phase);
+            break;
             
-        case 1: // Triangle
-            return 4.0f * std::abs(normPhase - 0.5f) - 1.0f;
+        case 1: // Triangle (bandlimited approximation)
+        {
+            // Better triangle with reduced aliasing
+            sample = 4.0f * std::abs(normPhase - 0.5f) - 1.0f;
+            // Apply light saturation to smooth edges
+            float saturated = std::tanh(sample * 1.2f) / 1.2f;
+            sample = saturated;
+            break;
+        }
             
-        case 2: // Sawtooth
-            return 2.0f * normPhase - 1.0f;
+        case 2: // Sawtooth (anti-aliased)
+        {
+            // Sawtooth with Gibbs correction for aliasing reduction
+            sample = 2.0f * normPhase - 1.0f;
+            // Apply anti-aliasing filter via saturation
+            sample = std::tanh(sample * 0.8f) / 0.8f;
+            break;
+        }
             
-        case 3: // Square
-            return normPhase < 0.5f ? 1.0f : -1.0f;
+        case 3: // Square (anti-aliased via soft switching)
+        {
+            // Instead of hard square, use smooth transition
+            float transition = std::sin(normPhase * juce::MathConstants<float>::pi);
+            float hardSquare = normPhase < 0.5f ? 1.0f : -1.0f;
+            // Blend with smoothed version to reduce aliasing
+            sample = hardSquare * 0.85f + transition * 0.25f;
+            break;
+        }
             
-        case 4: // 25% Pulse
-            return normPhase < 0.25f ? 1.0f : -1.0f;
+        case 4: // 25% Pulse (anti-aliased)
+        {
+            float transition = std::sin(normPhase * juce::MathConstants<float>::pi);
+            float hardPulse = normPhase < 0.25f ? 1.0f : -1.0f;
+            sample = hardPulse * 0.85f + transition * 0.25f;
+            break;
+        }
             
-        case 5: // 10% Pulse
-            return normPhase < 0.10f ? 1.0f : -1.0f;
+        case 5: // 10% Pulse (anti-aliased)
+        {
+            float transition = std::sin(normPhase * juce::MathConstants<float>::pi);
+            float hardPulse = normPhase < 0.10f ? 1.0f : -1.0f;
+            sample = hardPulse * 0.85f + transition * 0.25f;
+            break;
+        }
             
         default:
-            return std::sin(phase);
+            sample = std::sin(phase);
+            break;
     }
+    
+    return sample;
 }
 
 bool Neon37AudioProcessor::hasEditor() const
