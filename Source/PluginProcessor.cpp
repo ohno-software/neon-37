@@ -731,7 +731,10 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
         
         // Calculate voice scaling to prevent overdrive from multiple voices mixing
-        float voiceGain = activeVoiceCount > 0 ? 1.0f / (float)activeVoiceCount : 1.0f;
+        // Note: In paraphonic mode, the shared amplitude envelope controls overall volume,
+        // so voices should not be scaled down by voice count. This maintains consistent
+        // envelope behavior regardless of note count.
+        float voiceGain = 1.0f;  // No scaling - envelope handles volume control
         
         // Render each active voice
         for (int voiceIdx = 0; voiceIdx < MAX_VOICES; ++voiceIdx)
