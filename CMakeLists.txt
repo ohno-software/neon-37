@@ -9,7 +9,7 @@ include(FetchContent)
 FetchContent_Declare(
     juce
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        7.0.5 # Or latest stable
+    GIT_TAG        7.0.12 # Or latest stable
     PATCH_COMMAND  ${CMAKE_COMMAND}
         -DSOURCE_DIR=<SOURCE_DIR>
         -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
