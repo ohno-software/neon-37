@@ -7,9 +7,8 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
-
     steps:
     - uses: actions/checkout@v3
 
@@ -50,3 +49,42 @@ jobs:
       with:
         name: Neon37_Windows
         path: Neon37_Windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: cmake -B build -G Xcode -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Prepare Artifacts
+      run: |
+        mkdir -p artifacts
+        
+        # Copy VST3
+        if [ -d "build/Neon37_artefacts/Release/VST3/Neon37.vst3" ]; then
+            cp -R "build/Neon37_artefacts/Release/VST3/Neon37.vst3" artifacts/
+        else
+            echo "Warning: VST3 not found"
+        fi
+        
+        # Copy Standalone App
+        if [ -d "build/Neon37_artefacts/Release/Standalone/Neon37.app" ]; then
+            cp -R "build/Neon37_artefacts/Release/Standalone/Neon37.app" artifacts/
+        else
+            echo "Warning: Standalone App not found"
+        fi
+
+    - name: Zip Artifacts
+      run: |
+        zip -r Neon37_MacOS.zip artifacts
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Neon37_MacOS
+        path: Neon37_MacOS.zip

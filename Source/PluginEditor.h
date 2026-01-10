@@ -272,18 +272,13 @@ private:
         }
     };
 
-    LED osc1Led, osc2Led;
-    
     // Sidebar Buttons
     SmallButton holdBtn{"HOLD"}, monoLBtn{"MONO-L"}, monoBtn{"MONO"}, paraLBtn{"PARA-L"}, paraBtn{"PARA"}, polyBtn{"POLY"};
     
     // Oscillator Buttons
-    SmallButton hardSyncBtn{"HARD SYNC"}, keySyncBtn{"KEY SYNC"};
+
     
     // Envelope Buttons
-    SmallButton fltRetrigBtn{"RETRIG"}, fltResetBtn{"RESET"}, fltSyncBtn{"SYNC"}, fltCycleBtn{"CYCLE"};
-    SmallButton ampRetrigBtn{"RETRIG"}, ampResetBtn{"RESET"}, ampSyncBtn{"SYNC"}, ampCycleBtn{"CYCLE"};
-    SmallButton envHoldOnBtn{"HOLD ON"}, envExpCurvBtn{"EXP CURV"};
 
     // Gliss Buttons
     SmallButton glissRteBtn{"RT"}, glissTmeBtn{"TM"}, glissLogBtn{"LG"}, glissOnGatLegBtn{"ON GAT LEG"};
@@ -299,6 +294,7 @@ private:
 
     Logo logo;
 
+    Section oscillatorAndMixerSection{"OSCILLATOR & MIXER"};
     Section oscillatorSection{"OSCILLATOR"};
     struct Slider : public juce::Component
     {
@@ -328,15 +324,15 @@ private:
     Knob osc2Wave{"WAVE", true}, osc2Octave{"OCTAVE"}, osc2Semitones{"SEMITONES"}, osc2Fine{"FINE"};
 
     Section mixerSection{"MIXER"};
-    Knob mixOsc1{"OSC 1"}, mixSub1{"SUB 1"}, mixOsc2{"OSC 2"}, mixNoise{"NOISE"}, mixReturn{"RETURN"};
+    Knob mixOsc1{"OSC 1"}, mixSub1{"SUB 1"}, mixOsc2{"OSC 2"}, mixNoise{"NOISE"};
 
     Section filterSection{"FILTER"};
     Knob filterCutoff{"CUTOFF"}, filterRes{"RESONANCE"}, filterDrive{"DRIVE"}, filterEgDepth{"EG DEPTH"}, filterKeyTrk{"KEY TRK"};
 
-    Section envelopeSection{"ENVELOPE"};
-    // Filter/Mod and Amp envelopes
-    juce::Label env1Label, env2Label;
+    Section env1Section{"FILTER ENV"};
     Knob fltA{"A"}, fltD{"D"}, fltS{"S"}, fltR{"R"};
+
+    Section env2Section{"AMP ENV"};
     Knob ampA{"A"}, ampD{"D"}, ampS{"S"}, ampR{"R"};
 
     Section mod1Section{"LFO"};
@@ -360,7 +356,8 @@ private:
     juce::Label lfo1Label{"", "LFO 1"}, lfo2Label{"", "LFO 2"}, velLabel{"", "VELOCITY"}, atLabel{"", "AFTERTOUCH"}, mwLabel{"", "MOD WHEEL"}, pbLabel{"", "PITCH BEND"};
     
     Section masterSection{"MASTER"};
-    Knob glissTime{"TIME"};
+    juce::Label modeLabel{};  // For voice mode buttons
+    Knob glissTime{"GLIDE TIME"};
     Knob masterVolume{"VOLUME"}, masterFreq{"MASTER FREQ"}, masterTune{"MASTER TUNE"};
 
     // APVTS Attachments
@@ -370,13 +367,12 @@ private:
     std::unique_ptr<SliderAttachment> masterVolAttach, masterFreqAttach, masterTuneAttach;
     std::unique_ptr<SliderAttachment> osc1WaveAttach, osc1OctaveAttach, osc1SemitonesAttach, osc1FineAttach;
     std::unique_ptr<SliderAttachment> osc2WaveAttach, osc2OctaveAttach, osc2SemitonesAttach, osc2FineAttach;
-    std::unique_ptr<SliderAttachment> mixOsc1Attach, mixSub1Attach, mixOsc2Attach, mixNoiseAttach, mixReturnAttach;
+    std::unique_ptr<SliderAttachment> mixOsc1Attach, mixSub1Attach, mixOsc2Attach, mixNoiseAttach;
     std::unique_ptr<SliderAttachment> cutoffAttach, resAttach, driveAttach, egDepthAttach, keyTrkAttach;
     std::unique_ptr<SliderAttachment> fltAAttach, fltDAttach, fltSAttach, fltRAttach;
     std::unique_ptr<SliderAttachment> ampAAttach, ampDAttach, ampSAttach, ampRAttach;
     std::unique_ptr<SliderAttachment> glissTimeAttach;
     std::unique_ptr<ButtonAttachment> glissRteAttach, glissTmeAttach, glissLogAttach, glissOnGatLegAttach;
-    std::unique_ptr<ButtonAttachment> hardSyncAttach, keySyncAttach;
     std::unique_ptr<ButtonAttachment> envExpCurvAttach, holdAttach;
     
     struct VoiceModeAttachment : public juce::AudioProcessorValueTreeState::Listener

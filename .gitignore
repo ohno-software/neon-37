@@ -33,3 +33,8 @@ Makefile
 # OS files
 .DS_Store
 Thumbs.db
+
+# Agent files
+.agent/
+.agent_memory/
+

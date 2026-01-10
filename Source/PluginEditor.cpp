@@ -9,7 +9,8 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     addAndMakeVisible(masterSection);
     masterSection.addAndMakeVisible(logo);
     
-    addAndMakeVisible(oscillatorSection);
+    addAndMakeVisible(oscillatorAndMixerSection);
+    oscillatorAndMixerSection.addAndMakeVisible(oscillatorSection);    
     oscillatorSection.addAndMakeVisible(osc1Wave);
     oscillatorSection.addAndMakeVisible(osc1Octave);
     oscillatorSection.addAndMakeVisible(osc1Semitones);
@@ -18,13 +19,11 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     oscillatorSection.addAndMakeVisible(osc2Octave);
     oscillatorSection.addAndMakeVisible(osc2Semitones);
     oscillatorSection.addAndMakeVisible(osc2Fine);
-
-    addAndMakeVisible(mixerSection);
+    oscillatorAndMixerSection.addAndMakeVisible(mixerSection);
     mixerSection.addAndMakeVisible(mixOsc1);
     mixerSection.addAndMakeVisible(mixSub1);
     mixerSection.addAndMakeVisible(mixOsc2);
     mixerSection.addAndMakeVisible(mixNoise);
-    mixerSection.addAndMakeVisible(mixReturn);
 
     addAndMakeVisible(filterSection);
     filterSection.addAndMakeVisible(filterCutoff);
@@ -33,28 +32,17 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     filterSection.addAndMakeVisible(filterEgDepth);
     filterSection.addAndMakeVisible(filterKeyTrk);
 
-    addAndMakeVisible(envelopeSection);
-    
-    envelopeSection.addAndMakeVisible(env1Label);
-    env1Label.setText("ENV 1 - FILTER/MOD", juce::dontSendNotification);
-    env1Label.setFont(juce::Font(11.0f, juce::Font::bold));
-    env1Label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.8f));
-    env1Label.setJustificationType(juce::Justification::centred);
-    
-    envelopeSection.addAndMakeVisible(env2Label);
-    env2Label.setText("ENV 2 - AMP", juce::dontSendNotification);
-    env2Label.setFont(juce::Font(11.0f, juce::Font::bold));
-    env2Label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.8f));
-    env2Label.setJustificationType(juce::Justification::centred);
-    
-    envelopeSection.addAndMakeVisible(fltA);
-    envelopeSection.addAndMakeVisible(fltD);
-    envelopeSection.addAndMakeVisible(fltS);
-    envelopeSection.addAndMakeVisible(fltR);
-    envelopeSection.addAndMakeVisible(ampA);
-    envelopeSection.addAndMakeVisible(ampD);
-    envelopeSection.addAndMakeVisible(ampS);
-    envelopeSection.addAndMakeVisible(ampR);
+    addAndMakeVisible(env1Section);
+    env1Section.addAndMakeVisible(fltA);
+    env1Section.addAndMakeVisible(fltD);
+    env1Section.addAndMakeVisible(fltS);
+    env1Section.addAndMakeVisible(fltR);
+
+    addAndMakeVisible(env2Section);
+    env2Section.addAndMakeVisible(ampA);
+    env2Section.addAndMakeVisible(ampD);
+    env2Section.addAndMakeVisible(ampS);
+    env2Section.addAndMakeVisible(ampR);
 
     addAndMakeVisible(mod1Section);
     mod1Section.addAndMakeVisible(lfo1Rate);
@@ -106,29 +94,18 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     masterSection.addAndMakeVisible(glissLogBtn);
     masterSection.addAndMakeVisible(glissOnGatLegBtn);
     masterSection.addAndMakeVisible(holdBtn);
+    
+    masterSection.addAndMakeVisible(modeLabel);
+    modeLabel.setText("MODE", juce::dontSendNotification);
+    modeLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    modeLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.8f));
+    modeLabel.setJustificationType(juce::Justification::centred);
+    
     masterSection.addAndMakeVisible(monoLBtn);
     masterSection.addAndMakeVisible(monoBtn);
     masterSection.addAndMakeVisible(paraLBtn);
     masterSection.addAndMakeVisible(paraBtn);
     masterSection.addAndMakeVisible(polyBtn);
-
-    oscillatorSection.addAndMakeVisible(hardSyncBtn);
-    oscillatorSection.addAndMakeVisible(keySyncBtn);
-
-    envelopeSection.addAndMakeVisible(fltRetrigBtn);
-    envelopeSection.addAndMakeVisible(fltResetBtn);
-    envelopeSection.addAndMakeVisible(fltSyncBtn);
-    envelopeSection.addAndMakeVisible(fltCycleBtn);
-    envelopeSection.addAndMakeVisible(ampRetrigBtn);
-    envelopeSection.addAndMakeVisible(ampResetBtn);
-    envelopeSection.addAndMakeVisible(ampSyncBtn);
-    envelopeSection.addAndMakeVisible(ampCycleBtn);
-    envelopeSection.addAndMakeVisible(envHoldOnBtn);
-    envelopeSection.addAndMakeVisible(envExpCurvBtn);
-
-    mixerSection.addAndMakeVisible(osc1Led);
-    mixerSection.addAndMakeVisible(osc2Led);
-    osc1Led.on = true;
 
     // Initialize APVTS Attachments
     auto& apvts = audioProcessor.apvts;
@@ -169,8 +146,6 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     setupKnob(mixOsc2, "mixer_osc2");
     mixNoiseAttach = std::make_unique<SliderAttachment>(apvts, "mixer_noise", mixNoise.slider);
     setupKnob(mixNoise, "mixer_noise");
-    mixReturnAttach = std::make_unique<SliderAttachment>(apvts, "mixer_return", mixReturn.slider);
-    setupKnob(mixReturn, "mixer_return");
 
     cutoffAttach = std::make_unique<SliderAttachment>(apvts, "cutoff", filterCutoff.slider);
     setupKnob(filterCutoff, "cutoff");
@@ -208,8 +183,6 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     glissLogAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_log", glissLogBtn);
     glissOnGatLegAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_on_gat_leg", glissOnGatLegBtn);
 
-    hardSyncAttach = std::make_unique<ButtonAttachment>(apvts, "hard_sync", hardSyncBtn);
-    envExpCurvAttach = std::make_unique<ButtonAttachment>(apvts, "env_exp_curv", envExpCurvBtn);
     holdAttach = std::make_unique<ButtonAttachment>(apvts, "hold_mode", holdBtn);
 
     auto setVoiceMode = [this](int mode) {
@@ -356,7 +329,7 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
         patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
     };
 
-    setSize (1300, 850);
+    setSize (1100, 850);
 }
 
 Neon37AudioProcessorEditor::~Neon37AudioProcessorEditor()
@@ -510,8 +483,9 @@ void Neon37AudioProcessorEditor::resized()
     glissLogBtn.setBounds(glissBtns.removeFromLeft(glissBtns.getWidth() / 2).reduced(2));
     glissOnGatLegBtn.setBounds(glissBtns.reduced(2));
     
-    auto sideBtns = sideContent.removeFromTop(160);
+    auto sideBtns = sideContent.removeFromTop(170);
     holdBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
+    modeLabel.setBounds(sideBtns.removeFromTop(18).reduced(5, 2));
     monoLBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
     monoBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
     paraLBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
@@ -522,20 +496,16 @@ void Neon37AudioProcessorEditor::resized()
     
     auto mainArea = area;
     
-    // Right side MOD section - now full height for bigger knobs
-    auto rightArea = mainArea.removeFromRight(280);
-    modBottomSection.setBounds(rightArea.reduced(4));
-
     // Main area for OSC, MIXER, FILTER, ENVELOPE
-    oscillatorSection.setBounds(mainArea.removeFromLeft(300).reduced(4));
-    mixerSection.setBounds(mainArea.removeFromLeft(130).reduced(4));
+    oscillatorAndMixerSection.setBounds(mainArea.removeFromLeft(300).reduced(4));
+    auto oscMixArea = oscillatorAndMixerSection.getLocalBounds();
+    oscillatorSection.setBounds(oscMixArea.removeFromTop(oscMixArea.getHeight() / 2));
+    mixerSection.setBounds(oscMixArea);  // Now contains the bottom half after removeFromTop
     
     // Filter column split: Filter on top, LFO on bottom
     auto filterCol = mainArea.removeFromLeft(220);
     filterSection.setBounds(filterCol.removeFromTop(filterCol.getHeight() / 2).reduced(4));
     mod1Section.setBounds(filterCol.reduced(4));
-    
-    envelopeSection.setBounds(mainArea.reduced(4));
 
     // Layout LFOs in their new home
     auto lfoArea = mod1Section.getLocalBounds().withTrimmedTop(35).reduced(10);
@@ -550,8 +520,68 @@ void Neon37AudioProcessorEditor::resized()
     lfo2Rate.setBounds(lfo2Row.removeFromLeft(70));
     lfo2SyncBtn.setBounds(lfo2Row.removeFromLeft(50).withSizeKeepingCentre(40, 20));
     lfo2Wave.setBounds(lfo2Row.removeFromLeft(70));
+    
+    // Layout knobs within sections - split oscillator section in half
+    auto oscArea = oscillatorSection.getLocalBounds().withTrimmedTop(40).reduced(15);
+    
+    // Top half for Osc 1
+    auto osc1Area = oscArea.removeFromTop(oscArea.getHeight() / 2);
+    osc1Area.removeFromBottom(8); // Space for separator
+    auto oscRow1 = osc1Area.withSizeKeepingCentre(osc1Area.getWidth(), 90);
+    osc1Wave.setBounds(oscRow1.removeFromLeft(70));
+    osc1Octave.setBounds(oscRow1.removeFromLeft(70));
+    osc1Semitones.setBounds(oscRow1.removeFromLeft(70));
+    osc1Fine.setBounds(oscRow1.removeFromLeft(70));
+    
+    // Bottom half for Osc 2
+    auto osc2Area = oscArea;
+    osc2Area.removeFromTop(8); // Space for separator
+    auto oscRow2 = osc2Area.withSizeKeepingCentre(osc2Area.getWidth(), 90);
+    osc2Wave.setBounds(oscRow2.removeFromLeft(70));
+    osc2Octave.setBounds(oscRow2.removeFromLeft(70));
+    osc2Semitones.setBounds(oscRow2.removeFromLeft(70));
+    osc2Fine.setBounds(oscRow2.removeFromLeft(70));
 
-    // Layout Mod Bottom (Routing) - now with much more vertical space
+    auto mixArea = mixerSection.getLocalBounds().withTrimmedTop(40).reduced(15);
+    auto mixRowH = 90;  // Height for each row
+    
+    // Row 1: Osc1 and Osc2 side by side
+    auto row1 = mixArea.removeFromTop(mixRowH);
+    mixOsc1.setBounds(row1.removeFromLeft(row1.getWidth() / 2));
+    mixOsc2.setBounds(row1);
+    
+    // Row 2: Sub and Noise side by side
+    auto row2 = mixArea.removeFromTop(mixRowH);
+    mixSub1.setBounds(row2.removeFromLeft(row2.getWidth() / 2));
+    mixNoise.setBounds(row2);
+
+    auto filterArea = filterSection.getLocalBounds().withTrimmedTop(40).reduced(15);
+    filterCutoff.setBounds(filterArea.removeFromTop(90));
+    auto filterRow2 = filterArea.removeFromTop(90);
+    filterRes.setBounds(filterRow2.removeFromLeft(filterRow2.getWidth() / 2));
+    filterDrive.setBounds(filterRow2);
+    auto filterRow3 = filterArea.removeFromTop(90);
+    filterEgDepth.setBounds(filterRow3.removeFromLeft(filterRow3.getWidth() / 2));
+    filterKeyTrk.setBounds(filterRow3);
+
+    // ENV1 section
+    env1Section.setBounds(mainArea.removeFromLeft(110).reduced(4));
+    auto env1Area = env1Section.getLocalBounds().withTrimmedTop(40).reduced(15);
+    fltA.setBounds(env1Area.removeFromTop(90));
+    fltD.setBounds(env1Area.removeFromTop(90));
+    fltS.setBounds(env1Area.removeFromTop(90));
+    fltR.setBounds(env1Area.removeFromTop(90));
+    
+    // ENV2 section
+    env2Section.setBounds(mainArea.removeFromLeft(110).reduced(4));
+    auto env2Area = env2Section.getLocalBounds().withTrimmedTop(40).reduced(15);
+    ampA.setBounds(env2Area.removeFromTop(90));
+    ampD.setBounds(env2Area.removeFromTop(90));
+    ampS.setBounds(env2Area.removeFromTop(90));
+    ampR.setBounds(env2Area.removeFromTop(90));
+    
+    // Modulation section - now next to ENV2
+    modBottomSection.setBounds(mainArea.removeFromLeft(270).reduced(4));
     auto modBArea = modBottomSection.getLocalBounds().withTrimmedTop(35).reduced(10);
     auto layoutModRow = [&](juce::Rectangle<int> row, juce::Label& label, juce::Component* input, Knob& k1, Knob& k2, Knob& k3, SmallButton& mwBtn) {
         label.setBounds(row.removeFromTop(20));
@@ -611,92 +641,6 @@ void Neon37AudioProcessorEditor::resized()
         pbFilter.setBounds(row.removeFromLeft(knobW));
         pbAmp.setBounds(row.removeFromLeft(knobW));
     }
-    
-    // Layout knobs within sections - split oscillator section in half
-    auto oscArea = oscillatorSection.getLocalBounds().withTrimmedTop(40).reduced(15);
-    
-    // Top half for Osc 1
-    auto osc1Area = oscArea.removeFromTop(oscArea.getHeight() / 2);
-    osc1Area.removeFromBottom(8); // Space for separator
-    auto oscRow1 = osc1Area.withSizeKeepingCentre(osc1Area.getWidth(), 90);
-    osc1Wave.setBounds(oscRow1.removeFromLeft(70));
-    osc1Octave.setBounds(oscRow1.removeFromLeft(70));
-    osc1Semitones.setBounds(oscRow1.removeFromLeft(70));
-    osc1Fine.setBounds(oscRow1.removeFromLeft(70));
-    
-    // Bottom half for Osc 2
-    auto osc2Area = oscArea;
-    osc2Area.removeFromTop(8); // Space for separator
-    auto oscRow2 = osc2Area.withSizeKeepingCentre(osc2Area.getWidth(), 90);
-    osc2Wave.setBounds(oscRow2.removeFromLeft(70));
-    osc2Octave.setBounds(oscRow2.removeFromLeft(70));
-    osc2Semitones.setBounds(oscRow2.removeFromLeft(70));
-    osc2Fine.setBounds(oscRow2.removeFromLeft(70));
-    
-    auto oscBtns = oscArea.removeFromTop(40);
-    hardSyncBtn.setBounds(oscBtns.removeFromTop(24).reduced(10, 3));
-    keySyncBtn.setBounds(oscBtns.removeFromTop(24).reduced(10, 3));
-
-    auto mixArea = mixerSection.getLocalBounds().withTrimmedTop(40).reduced(15);
-    auto mixRowH = 75; // Increased from 55 for bigger knobs
-    auto osc1Row = mixArea.removeFromTop(mixRowH);
-    osc1Led.setBounds(osc1Row.removeFromRight(20).withSizeKeepingCentre(12, 12));
-    mixOsc1.setBounds(osc1Row);
-    
-    mixSub1.setBounds(mixArea.removeFromTop(mixRowH));
-    
-    auto osc2Row = mixArea.removeFromTop(mixRowH);
-    osc2Led.setBounds(osc2Row.removeFromRight(20).withSizeKeepingCentre(12, 12));
-    mixOsc2.setBounds(osc2Row);
-    
-    mixNoise.setBounds(mixArea.removeFromTop(mixRowH));
-    mixReturn.setBounds(mixArea.removeFromTop(mixRowH));
-
-    auto filterArea = filterSection.getLocalBounds().withTrimmedTop(40).reduced(15);
-    filterCutoff.setBounds(filterArea.removeFromTop(120).reduced(15, 0));
-    auto filterRow2 = filterArea.removeFromTop(90);
-    filterRes.setBounds(filterRow2.removeFromLeft(filterRow2.getWidth() / 2));
-    filterDrive.setBounds(filterRow2);
-    auto filterRow3 = filterArea.removeFromTop(90);
-    filterEgDepth.setBounds(filterRow3.removeFromLeft(filterRow3.getWidth() / 2));
-    filterKeyTrk.setBounds(filterRow3);
-
-    auto envArea = envelopeSection.getLocalBounds().withTrimmedTop(40).reduced(15);
-    env1Label.setBounds(envArea.removeFromTop(15));
-    auto fltRowH = 75;
-    auto fltADRow = envArea.removeFromTop(fltRowH);
-        fltA.setBounds(fltADRow.removeFromLeft(fltADRow.getWidth() / 2));
-        fltD.setBounds(fltADRow);
-    auto fltSRRow = envArea.removeFromTop(fltRowH);
-        fltS.setBounds(fltSRRow.removeFromLeft(fltSRRow.getWidth() / 2));
-        fltR.setBounds(fltSRRow);
-    
-    auto fltBtns = envArea.removeFromTop(50);
-    fltRetrigBtn.setBounds(fltBtns.removeFromLeft(fltBtns.getWidth() / 4).reduced(3));
-    fltResetBtn.setBounds(fltBtns.removeFromLeft(fltBtns.getWidth() / 3).reduced(3));
-    fltSyncBtn.setBounds(fltBtns.removeFromLeft(fltBtns.getWidth() / 2).reduced(3));
-    fltCycleBtn.setBounds(fltBtns.reduced(3));
-
-    auto envSpacerRow = envArea.removeFromTop(50);
-
-    env2Label.setBounds(envArea.removeFromTop(15));
-    auto ampRowH = 75;
-    auto ampADRow = envArea.removeFromTop(ampRowH);
-        ampA.setBounds(ampADRow.removeFromLeft(ampADRow.getWidth() / 2));
-        ampD.setBounds(ampADRow);
-    auto ampSRRow = envArea.removeFromTop(ampRowH);
-        ampS.setBounds(ampSRRow.removeFromLeft(ampSRRow.getWidth() / 2));   
-        ampR.setBounds(ampSRRow);
-    
-    auto ampBtns = envArea.removeFromTop(50);
-    ampRetrigBtn.setBounds(ampBtns.removeFromLeft(ampBtns.getWidth() / 4).reduced(3));
-    ampResetBtn.setBounds(ampBtns.removeFromLeft(ampBtns.getWidth() / 3).reduced(3));
-    ampSyncBtn.setBounds(ampBtns.removeFromLeft(ampBtns.getWidth() / 2).reduced(3));
-    ampCycleBtn.setBounds(ampBtns.reduced(3));
-    
-    auto envBottomBtns = envArea.removeFromTop(30);
-    envHoldOnBtn.setBounds(envBottomBtns.removeFromLeft(envBottomBtns.getWidth() / 2).reduced(15, 3));
-    envExpCurvBtn.setBounds(envBottomBtns.reduced(15, 3));
     
     // Position parameter value tooltip at the top center of the window
     parameterValueTooltip.setBounds(getWidth() / 2 - 150, 10, 300, 35);
