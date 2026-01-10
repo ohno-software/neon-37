@@ -15,7 +15,7 @@ endif()
 
 # 1) If the patch applies cleanly, apply it.
 execute_process(
-  COMMAND "${_git}" apply --check --whitespace=nowarn "${PATCH_FILE}"
+  COMMAND "${_git}" apply --check --whitespace=nowarn --ignore-space-change --ignore-whitespace "${PATCH_FILE}"
   WORKING_DIRECTORY "${SOURCE_DIR}"
   RESULT_VARIABLE _check_result
   OUTPUT_VARIABLE _check_out
@@ -24,7 +24,7 @@ execute_process(
 
 if (_check_result EQUAL 0)
   execute_process(
-    COMMAND "${_git}" apply --whitespace=nowarn "${PATCH_FILE}"
+    COMMAND "${_git}" apply --whitespace=nowarn --ignore-space-change --ignore-whitespace "${PATCH_FILE}"
     WORKING_DIRECTORY "${SOURCE_DIR}"
     RESULT_VARIABLE _apply_result
     OUTPUT_VARIABLE _apply_out
@@ -39,7 +39,7 @@ endif()
 
 # 2) If it does not apply, but would reverse cleanly, it's already applied.
 execute_process(
-  COMMAND "${_git}" apply --reverse --check --whitespace=nowarn "${PATCH_FILE}"
+  COMMAND "${_git}" apply --reverse --check --whitespace=nowarn --ignore-space-change --ignore-whitespace "${PATCH_FILE}"
   WORKING_DIRECTORY "${SOURCE_DIR}"
   RESULT_VARIABLE _reverse_check_result
   OUTPUT_VARIABLE _reverse_check_out
