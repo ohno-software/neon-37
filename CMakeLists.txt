@@ -4,12 +4,16 @@ project(Neon37 VERSION 0.0.1)
 
 find_package(Git REQUIRED)
 
+# Standard C++20 is recommended for JUCE 8 and modern MacOS
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Fetch JUCE
 include(FetchContent)
 FetchContent_Declare(
     juce
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        7.0.12 # Or latest stable
+    GIT_TAG        8.0.4
     PATCH_COMMAND  ${CMAKE_COMMAND}
         -DSOURCE_DIR=<SOURCE_DIR>
         -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
