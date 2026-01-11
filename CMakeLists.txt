@@ -8,6 +8,12 @@ find_package(Git REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# On MacOS, it's good practice to set the deployment target. 
+# JUCE 8 requires building with MacOS 11.1 SDK (Xcode 12.4+) but can target older OSs.
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version to target")
+endif()
+
 # Fetch JUCE
 include(FetchContent)
 FetchContent_Declare(
@@ -22,6 +28,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(juce)
 
+# Check if we are running in a CI environment to disable automatic copying
+if(DEFINED ENV{CI})
+    set(DEFAULT_COPY_AFTER_BUILD FALSE)
+else()
+    set(DEFAULT_COPY_AFTER_BUILD TRUE)
+endif()
+
 juce_add_plugin(Neon37
     COMPANY_NAME "Neon Audio"
     IS_SYNTH TRUE
@@ -29,7 +42,7 @@ juce_add_plugin(Neon37
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    COPY_AFTER_BUILD TRUE
+    COPY_AFTER_BUILD ${DEFAULT_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE Neon
     PLUGIN_CODE N37p
     FORMATS AU VST3 Standalone

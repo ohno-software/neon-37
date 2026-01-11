@@ -722,7 +722,6 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         float osc2Freq = lfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
         
         // Sub oscillator is one octave below osc1
-        float subFreq = osc1Freq * 0.5f;
         
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
@@ -832,7 +831,6 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             
             float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
             float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
-            float voiceSubFreq = voiceOsc1Freq * 0.5f;
             
             // Render voice's oscillators to voiceBuffer
             voices[voiceIdx].voiceBuffer.clear();
@@ -967,7 +965,6 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             
             float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
             float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
-            float voiceSubFreq = voiceOsc1Freq * 0.5f;
             
             // Render voice's oscillators
             voices[voiceIdx].voiceBuffer.clear();
