@@ -37,6 +37,7 @@ endif()
 
 juce_add_plugin(Neon37
     COMPANY_NAME "Neon Audio"
+    BUNDLE_ID "com.NeonAudio.Neon37"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
