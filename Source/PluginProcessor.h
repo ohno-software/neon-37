@@ -42,6 +42,7 @@ struct Neon37Voice
     juce::dsp::LadderFilter<float> filter;
     juce::ADSR filterEnv;
     juce::ADSR ampEnv;
+    juce::ADSR pitchEnv; // Per-voice pitch envelope
     
     // Buffer for rendering this voice's signal (before shared processing in para modes)
     juce::AudioBuffer<float> voiceBuffer;
@@ -97,15 +98,17 @@ private:
     juce::dsp::Gain<float> outputGain;
     juce::ADSR monoFilterEnv;
     juce::ADSR monoAmpEnv;
+    juce::ADSR monoPitchEnv;
     
     // Oversampling for alias-free oscillators (4x oversampling)
     std::unique_ptr<juce::dsp::Oversampling<float>> oversamplingUp;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversamplingDown;
     
     // Cache envelope parameters to avoid updating every block
-    float cachedEnv1Attack = 0.001f, cachedEnv1Decay = 0.05f, cachedEnv1Sustain = 1.0f, cachedEnv1Release = 0.05f;
-    float cachedEnv2Attack = 0.003f, cachedEnv2Decay = 0.05f, cachedEnv2Sustain = 1.0f, cachedEnv2Release = 0.05f;
-    
+    float cachedEnv1Attack = -1.0f, cachedEnv1Decay = -1.0f, cachedEnv1Sustain = -1.0f, cachedEnv1Release = -1.0f;
+    float cachedEnv2Attack = -1.0f, cachedEnv2Decay = -1.0f, cachedEnv2Sustain = -1.0f, cachedEnv2Release = -1.0f;
+    float cachedEnvPitchAttack = -1.0f, cachedEnvPitchDecay = -1.0f, cachedEnvPitchSustain = -1.0f, cachedEnvPitchRelease = -1.0f;
+
     double currentSampleRate = 44100.0;
     
     // Oscillator phase tracking - for MONO modes
@@ -134,6 +137,10 @@ private:
     float pitchBendValue = 0.0f;  // -1 to +1, from MIDI pitch bend
     float modWheelValueRaw = 0.0f;  // 0-1, from MIDI CC1 (raw mod wheel value, separate from modWheelValue which is used for LFO scaling)
     
+    // Generate envelope values for paraphonic mode
+    // Continue processing as long as envelopes are still active (releasing)    
+    juce::Random random;
+
     // Helper function to generate waveform samples
     float generateWaveform(float phase, int waveformType);
     

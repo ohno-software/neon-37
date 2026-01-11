@@ -124,6 +124,15 @@ void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     monoAmpEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
     monoAmpEnv.setParameters(monoAmpEnvParams);
     
+    // Initialize MONO pitch envelope
+    monoPitchEnv.setSampleRate(sampleRate);
+    juce::ADSR::Parameters monoPitchEnvParams;
+    monoPitchEnvParams.attack = apvts.getRawParameterValue("env_pitch_attack")->load();
+    monoPitchEnvParams.decay = apvts.getRawParameterValue("env_pitch_decay")->load();
+    monoPitchEnvParams.sustain = apvts.getRawParameterValue("env_pitch_sustain")->load();
+    monoPitchEnvParams.release = apvts.getRawParameterValue("env_pitch_release")->load();
+    monoPitchEnv.setParameters(monoPitchEnvParams);
+
     // Initialize paraphonic voices
     for (int i = 0; i < MAX_VOICES; ++i)
     {
@@ -163,6 +172,15 @@ void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
         polyAmpEnvParams.release = apvts.getRawParameterValue("env2_release")->load();
         voices[i].ampEnv.setParameters(polyAmpEnvParams);
         
+        // Per-voice pitch envelope (poly mode)
+        voices[i].pitchEnv.setSampleRate(sampleRate);
+        juce::ADSR::Parameters polyPitchEnvParams;
+        polyPitchEnvParams.attack = apvts.getRawParameterValue("env_pitch_attack")->load();
+        polyPitchEnvParams.decay = apvts.getRawParameterValue("env_pitch_decay")->load();
+        polyPitchEnvParams.sustain = apvts.getRawParameterValue("env_pitch_sustain")->load();
+        polyPitchEnvParams.release = apvts.getRawParameterValue("env_pitch_release")->load();
+        voices[i].pitchEnv.setParameters(polyPitchEnvParams);
+
         // Voice output buffer
         voices[i].voiceBuffer.setSize(getTotalNumOutputChannels(), samplesPerBlock);
     }
@@ -306,6 +324,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 {
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
+                    monoPitchEnv.noteOn();
                     monoFilter.reset();  // Reset filter smoothing state for instant response
                     
                     // Pre-set filter to initial envelope value to eliminate attack lag
@@ -361,6 +380,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 {
                     monoFilterEnv.noteOn();
                     monoAmpEnv.noteOn();
+                    monoPitchEnv.noteOn();
                     monoFilter.reset();  // Reset filter smoothing state for instant response
                     
                     // Pre-set filter to initial envelope value to eliminate attack lag
@@ -396,6 +416,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                         voices[i].active = false;
                         voices[i].ampEnv.noteOff();
                         voices[i].filterEnv.noteOff();
+                        voices[i].pitchEnv.noteOff();
                         break;
                     }
                 }
@@ -413,6 +434,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 // Trigger per-voice envelopes (always retrigger in poly mode, like MONO)
                 voices[voiceToAllocate].filterEnv.noteOn();
                 voices[voiceToAllocate].ampEnv.noteOn();
+                voices[voiceToAllocate].pitchEnv.noteOn();
                 voices[voiceToAllocate].filter.reset();  // Clear filter state to avoid startup transients
             }
         }
@@ -440,6 +462,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     {
                         monoFilterEnv.noteOn();
                         monoAmpEnv.noteOn();
+                        monoPitchEnv.noteOn();
                     }
                 }
                 else
@@ -449,6 +472,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     noteStack.clear();
                     monoFilterEnv.noteOff();
                     monoAmpEnv.noteOff();
+                    monoPitchEnv.noteOff();
                 }
             }
             else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes
@@ -464,6 +488,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     {
                         voices[i].filterEnv.noteOff();
                         voices[i].ampEnv.noteOff();
+                        voices[i].pitchEnv.noteOff();
                         break;
                     }
                 }
@@ -493,12 +518,9 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         monoFilterEnv.setParameters(filterEnvParams);
         
         // Update poly mode per-voice filter envelopes too
-        if (voiceMode == 4)
+        for (int i = 0; i < MAX_VOICES; ++i)
         {
-            for (int i = 0; i < MAX_VOICES; ++i)
-            {
-                voices[i].filterEnv.setParameters(filterEnvParams);
-            }
+            voices[i].filterEnv.setParameters(filterEnvParams);
         }
     }
     
@@ -524,12 +546,37 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         monoAmpEnv.setParameters(ampEnvParams);
         
         // Update poly mode per-voice amp envelopes too
-        if (voiceMode == 4)
+        for (int i = 0; i < MAX_VOICES; ++i)
         {
-            for (int i = 0; i < MAX_VOICES; ++i)
-            {
-                voices[i].ampEnv.setParameters(ampEnvParams);
-            }
+            voices[i].ampEnv.setParameters(ampEnvParams);
+        }
+    }
+
+    // Update pitch envelope parameters in real-time (only if changed)
+    float envPitchAttack = apvts.getRawParameterValue("env_pitch_attack")->load();
+    float envPitchDecay = apvts.getRawParameterValue("env_pitch_decay")->load();
+    float envPitchSustain = apvts.getRawParameterValue("env_pitch_sustain")->load();
+    float envPitchRelease = apvts.getRawParameterValue("env_pitch_release")->load();
+    
+    if (envPitchAttack != cachedEnvPitchAttack || envPitchDecay != cachedEnvPitchDecay || 
+        envPitchSustain != cachedEnvPitchSustain || envPitchRelease != cachedEnvPitchRelease)
+    {
+        cachedEnvPitchAttack = envPitchAttack;
+        cachedEnvPitchDecay = envPitchDecay;
+        cachedEnvPitchSustain = envPitchSustain;
+        cachedEnvPitchRelease = envPitchRelease;
+        
+        juce::ADSR::Parameters pitchEnvParams;
+        pitchEnvParams.attack = envPitchAttack;
+        pitchEnvParams.decay = envPitchDecay;
+        pitchEnvParams.sustain = envPitchSustain;
+        pitchEnvParams.release = envPitchRelease;
+        monoPitchEnv.setParameters(pitchEnvParams);
+        
+        // Update poly mode per-voice pitch envelopes too
+        for (int i = 0; i < MAX_VOICES; ++i)
+        {
+            voices[i].pitchEnv.setParameters(pitchEnvParams);
         }
     }
     
@@ -622,12 +669,22 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     float mixerOsc1 = juce::Decibels::decibelsToGain(mixerOsc1Db);
     float mixerOsc2 = juce::Decibels::decibelsToGain(mixerOsc2Db);
     float mixerSub1 = juce::Decibels::decibelsToGain(mixerSub1Db);
+    float mixerNoiseDb = apvts.getRawParameterValue("mixer_noise")->load();
+    float mixerNoise = juce::Decibels::decibelsToGain(mixerNoiseDb);
+
+    // Hard Sync
+    bool hardSync = (bool)*apvts.getRawParameterValue("hard_sync");
+
+    // Pitch Envelope Parameters
+    float pitchEgDepth = apvts.getRawParameterValue("env_pitch_depth")->load();
+    int pitchEgTarget = (int)*apvts.getRawParameterValue("env_pitch_target"); // 0: Osc1, 1: Both, 2: Osc2
     
     // Global oscillator level scaling to prevent overdrive (-12dB to keep headroom)
     constexpr float oscLevelScale = 0.25f;
     mixerOsc1 *= oscLevelScale;
     mixerOsc2 *= oscLevelScale;
     mixerSub1 *= oscLevelScale;
+    mixerNoise *= oscLevelScale;
     
     // Get filter parameters
     float baseCutoff = apvts.getRawParameterValue("cutoff")->load();
@@ -672,8 +729,20 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             // Get envelope values
             float filterEnvValue = monoFilterEnv.getNextSample();
             float ampEnvValue = monoAmpEnv.getNextSample();
+            float pitchEnvValue = monoPitchEnv.getNextSample();
+
             ampEnvBuffer.setSample(0, sample, ampEnvValue);
             
+            // Calculate Pitch EG modification
+            float pitchEgMod = pitchEnvValue * pitchEgDepth; // Semitones
+            float osc1PitchMod = (pitchEgTarget == 0 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+            float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+
+            // Calculate current sample frequency with Pitch EG
+            float currentOsc1Freq = osc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
+            float currentOsc2Freq = osc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+            float currentSubFreq = currentOsc1Freq * 0.5f;
+
             // Calculate and apply modulated cutoff
             float modulatedCutoff = calculateModulatedCutoff(baseCutoff, filterEnvValue, egDepth, totalFilterModMultiplier, resonance);
             monoFilter.setCutoffFrequencyHz(modulatedCutoff);
@@ -684,8 +753,9 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             float osc1Sample = generateWaveform(osc1Phase, osc1Wave) * mixerOsc1;
             float osc2Sample = generateWaveform(osc2Phase, osc2Wave) * mixerOsc2;
             float subSample = generateWaveform(subOscPhase, 2) * mixerSub1;
+            float noiseSample = (random.nextFloat() * 2.0f - 1.0f) * mixerNoise;
             
-            float mixed = osc1Sample + osc2Sample + subSample;
+            float mixed = osc1Sample + osc2Sample + subSample + noiseSample;
             
             for (int channel = 0; channel < totalNumOutputChannels; ++channel)
             {
@@ -693,18 +763,30 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             }
             
             // Update phases
-            osc1Phase += twoPiOverSr * osc1Freq;
-            osc2Phase += twoPiOverSr * osc2Freq;
-            subOscPhase += twoPiOverSr * subFreq;
-            
+            osc1Phase += twoPiOverSr * currentOsc1Freq;
+            osc2Phase += twoPiOverSr * currentOsc2Freq;
+            subOscPhase += twoPiOverSr * currentSubFreq;
+             
             // Wrap phases
-            if (osc1Phase > juce::MathConstants<float>::twoPi) osc1Phase -= juce::MathConstants<float>::twoPi;
+            if (osc1Phase > juce::MathConstants<float>::twoPi) 
+            {
+                osc1Phase -= juce::MathConstants<float>::twoPi;
+                if (hardSync)
+                    osc2Phase = 0.0f;
+            }
             if (osc2Phase > juce::MathConstants<float>::twoPi) osc2Phase -= juce::MathConstants<float>::twoPi;
             if (subOscPhase > juce::MathConstants<float>::twoPi) subOscPhase -= juce::MathConstants<float>::twoPi;
         }
     }
     else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic rendering (modes 2, 3)
     {
+        // Generate Pitch Envelope for this block (shared for all voices in Paraphonic)
+        juce::AudioBuffer<float> pitchEnvBuffer(1, buffer.getNumSamples());
+        for (int s = 0; s < buffer.getNumSamples(); ++s)
+        {
+            pitchEnvBuffer.setSample(0, s, monoPitchEnv.getNextSample());
+        }
+
         // Handle note-offs for paraphonic mode
         for (int note : releasedNotes)
         {
@@ -757,12 +839,23 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
+                // Calculate Pitch EG modification
+                float pitchEnvValue = pitchEnvBuffer.getSample(0, sample);
+                float pitchEgMod = pitchEnvValue * pitchEgDepth; // Semitones
+                float osc1PitchMod = (pitchEgTarget == 0 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+                float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+
+                // Calculate current sample frequency with Pitch EG
+                float currentVoiceOsc1Freq = voiceOsc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
+                float currentVoiceOsc2Freq = voiceOsc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+                float currentVoiceSubFreq = currentVoiceOsc1Freq * 0.5f;
+
                 // Generate oscillator samples for this voice
                 float osc1Sample = generateWaveform(voices[voiceIdx].osc1Phase, osc1Wave) * mixerOsc1;
                 float osc2Sample = generateWaveform(voices[voiceIdx].osc2Phase, osc2Wave) * mixerOsc2;
                 float subSample = generateWaveform(voices[voiceIdx].subOscPhase, 2) * mixerSub1;
                 
-                float mixed = osc1Sample + osc2Sample + subSample;
+                float mixed = (osc1Sample + osc2Sample + subSample);
                 
                 // Apply voice's amp gate (gates the oscillators on/off)
                 float gateValue = voices[voiceIdx].ampGate.getNextSample();
@@ -774,12 +867,17 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 }
                 
                 // Update voice's oscillator phases
-                voices[voiceIdx].osc1Phase += twoPiOverSr * voiceOsc1Freq;
-                voices[voiceIdx].osc2Phase += twoPiOverSr * voiceOsc2Freq;
-                voices[voiceIdx].subOscPhase += twoPiOverSr * voiceSubFreq;
+                voices[voiceIdx].osc1Phase += twoPiOverSr * currentVoiceOsc1Freq;
+                voices[voiceIdx].osc2Phase += twoPiOverSr * currentVoiceOsc2Freq;
+                voices[voiceIdx].subOscPhase += twoPiOverSr * currentVoiceSubFreq;
                 
                 // Wrap phases
-                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) 
+                {
+                    voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                    if (hardSync)
+                        voices[voiceIdx].osc2Phase = 0.0f;
+                }
                 if (voices[voiceIdx].osc2Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc2Phase -= juce::MathConstants<float>::twoPi;
                 if (voices[voiceIdx].subOscPhase > juce::MathConstants<float>::twoPi) voices[voiceIdx].subOscPhase -= juce::MathConstants<float>::twoPi;
             }
@@ -828,6 +926,13 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             monoFilter.setCutoffFrequencyHz(modulatedCutoff);
             monoFilter.setResonance(resonance);
             monoFilter.setDrive(drive);
+
+            // Add Noise
+            float noiseSample = (random.nextFloat() * 2.0f - 1.0f) * mixerNoise;
+            for (int channel = 0; channel < totalNumOutputChannels; ++channel)
+            {
+                synthBuffer.addSample(channel, sample, noiseSample);
+            }
         }
         
         // Update tracking flag for next block's retrigger logic
@@ -869,12 +974,24 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
+                // Pitch Envelope
+                float pitchEnvValue = voices[voiceIdx].pitchEnv.getNextSample();
+                float pitchEgMod = pitchEnvValue * pitchEgDepth; // Semitones
+                float osc1PitchMod = (pitchEgTarget == 0 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+                float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
+
+                // Calculate current sample frequency with Pitch EG
+                float currentVoiceOsc1Freq = voiceOsc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
+                float currentVoiceOsc2Freq = voiceOsc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+                float currentVoiceSubFreq = currentVoiceOsc1Freq * 0.5f;
+
                 // Generate oscillator samples for this voice
                 float osc1Sample = generateWaveform(voices[voiceIdx].osc1Phase, osc1Wave) * mixerOsc1;
                 float osc2Sample = generateWaveform(voices[voiceIdx].osc2Phase, osc2Wave) * mixerOsc2;
                 float subSample = generateWaveform(voices[voiceIdx].subOscPhase, 2) * mixerSub1;
+                float noiseSample = (random.nextFloat() * 2.0f - 1.0f) * mixerNoise;
                 
-                float mixed = (osc1Sample + osc2Sample + subSample);
+                float mixed = (osc1Sample + osc2Sample + subSample + noiseSample);
                 
                 for (int channel = 0; channel < totalNumOutputChannels; ++channel)
                 {
@@ -882,12 +999,17 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 }
                 
                 // Update voice's oscillator phases
-                voices[voiceIdx].osc1Phase += twoPiOverSr * voiceOsc1Freq;
-                voices[voiceIdx].osc2Phase += twoPiOverSr * voiceOsc2Freq;
-                voices[voiceIdx].subOscPhase += twoPiOverSr * voiceSubFreq;
+                voices[voiceIdx].osc1Phase += twoPiOverSr * currentVoiceOsc1Freq;
+                voices[voiceIdx].osc2Phase += twoPiOverSr * currentVoiceOsc2Freq;
+                voices[voiceIdx].subOscPhase += twoPiOverSr * currentVoiceSubFreq;
                 
                 // Wrap phases
-                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                if (voices[voiceIdx].osc1Phase > juce::MathConstants<float>::twoPi) 
+                {
+                    voices[voiceIdx].osc1Phase -= juce::MathConstants<float>::twoPi;
+                    if (hardSync)
+                        voices[voiceIdx].osc2Phase = 0.0f;
+                }
                 if (voices[voiceIdx].osc2Phase > juce::MathConstants<float>::twoPi) voices[voiceIdx].osc2Phase -= juce::MathConstants<float>::twoPi;
                 if (voices[voiceIdx].subOscPhase > juce::MathConstants<float>::twoPi) voices[voiceIdx].subOscPhase -= juce::MathConstants<float>::twoPi;
             }
@@ -1222,6 +1344,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_sustain", "Env 2 Sustain", 0.0f, 1.0f, 1.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("env2_release", "Env 2 Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("env_exp_curv", "Exponential Envelopes", true));
+
+    // Pitch Envelope
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env_pitch_attack", "Pitch Env Attack", juce::NormalisableRange<float> (0.001f, 10.0f, 0.001f, 0.2f), 0.001f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env_pitch_decay", "Pitch Env Decay", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env_pitch_sustain", "Pitch Env Sustain", 0.0f, 1.0f, 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env_pitch_release", "Pitch Env Release", juce::NormalisableRange<float> (0.003f, 10.0f, 0.001f, 0.2f), 0.05f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("env_pitch_depth", "Pitch Env Depth", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f, 1.0f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("env_pitch_target", "Pitch Env Target", juce::StringArray { "Osc 1", "Both", "Osc 2" }, 1)); // Match UI: 0=Osc1, 1=Both, 2=Osc2
 
     // Arpeggiator
     params.push_back (std::make_unique<juce::AudioParameterBool> ("arp_on", "Arp On", false)); // Default OFF

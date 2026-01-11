@@ -16,6 +16,7 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     oscillatorSection.addAndMakeVisible(osc1Semitones);
     oscillatorSection.addAndMakeVisible(osc1Fine);
     oscillatorSection.addAndMakeVisible(osc2Wave);
+    oscillatorSection.addAndMakeVisible(oscSyncBtn); // Should be visible in oscillator section
     oscillatorSection.addAndMakeVisible(osc2Octave);
     oscillatorSection.addAndMakeVisible(osc2Semitones);
     oscillatorSection.addAndMakeVisible(osc2Fine);
@@ -29,10 +30,19 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     filterSection.addAndMakeVisible(filterCutoff);
     filterSection.addAndMakeVisible(filterRes);
     filterSection.addAndMakeVisible(filterDrive);
-    filterSection.addAndMakeVisible(filterEgDepth);
+    // filterEgDepth moved to env1Section
     filterSection.addAndMakeVisible(filterKeyTrk);
+    
+    addAndMakeVisible(pitchEnvSection);
+    pitchEnvSection.addAndMakeVisible(pitchTargetSelector);
+    pitchEnvSection.addAndMakeVisible(pitchDepth);
+    pitchEnvSection.addAndMakeVisible(pitchA);
+    pitchEnvSection.addAndMakeVisible(pitchD);
+    pitchEnvSection.addAndMakeVisible(pitchS);
+    pitchEnvSection.addAndMakeVisible(pitchR);
 
     addAndMakeVisible(env1Section);
+    env1Section.addAndMakeVisible(filterEgDepth); // Moved here
     env1Section.addAndMakeVisible(fltA);
     env1Section.addAndMakeVisible(fltD);
     env1Section.addAndMakeVisible(fltS);
@@ -137,6 +147,12 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     setupKnob(osc2Semitones, "osc2_semitones");
     osc2FineAttach = std::make_unique<SliderAttachment>(apvts, "osc2_fine", osc2Fine.slider);
     setupKnob(osc2Fine, "osc2_fine");
+    
+    // Existing hard_sync parameter is already defined in PluginProcessor.cpp L346 under Global Osc
+    // We can use it, or create a new one if it was intended differently. 
+    // Looking at read_file output which I didn't see earlier, I should check parameter name.
+    // L346: params.push_back (std::make_unique<juce::AudioParameterBool> ("hard_sync", "Hard Sync", false));
+    oscSyncAttach = std::make_unique<ButtonAttachment>(apvts, "hard_sync", oscSyncBtn);
 
     mixOsc1Attach = std::make_unique<SliderAttachment>(apvts, "mixer_osc1", mixOsc1.slider);
     setupKnob(mixOsc1, "mixer_osc1");
@@ -157,6 +173,32 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     setupKnob(filterEgDepth, "eg_depth");
     keyTrkAttach = std::make_unique<SliderAttachment>(apvts, "key_track", filterKeyTrk.slider);
     setupKnob(filterKeyTrk, "key_track");
+
+    pitchTargetSelector.onClick = [this](int index) {
+        auto* param = audioProcessor.apvts.getParameter("env_pitch_target");
+        if (param)
+        {
+             // AudioParameterChoice takes normalized 0-1 range or index?
+             // getParameter returns RangedAudioParameter. setValueNotifyingHost expects 0-1.
+             // We need to convert index to 0-1.
+             // AudioParameterChoice normalizes index / (numChoices - 1)
+             // Choices are 3: 0, 1, 2. Max is 2.
+             float value = (float)index / 2.0f;
+             param->setValueNotifyingHost(value);
+        }
+    };
+
+    pitchTargetAttach = std::make_unique<PitchTargetAttachment>(*this);
+    pitchDepthAttach = std::make_unique<SliderAttachment>(apvts, "env_pitch_depth", pitchDepth.slider);
+    setupKnob(pitchDepth, "env_pitch_depth");
+    pitchAAttach = std::make_unique<SliderAttachment>(apvts, "env_pitch_attack", pitchA.slider);
+    setupKnob(pitchA, "env_pitch_attack");
+    pitchDAttach = std::make_unique<SliderAttachment>(apvts, "env_pitch_decay", pitchD.slider);
+    setupKnob(pitchD, "env_pitch_decay");
+    pitchSAttach = std::make_unique<SliderAttachment>(apvts, "env_pitch_sustain", pitchS.slider);
+    setupKnob(pitchS, "env_pitch_sustain");
+    pitchRAttach = std::make_unique<SliderAttachment>(apvts, "env_pitch_release", pitchR.slider);
+    setupKnob(pitchR, "env_pitch_release");
 
     fltAAttach = std::make_unique<SliderAttachment>(apvts, "env1_attack", fltA.slider);
     setupKnob(fltA, "env1_attack");
@@ -329,7 +371,7 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
         patchNameBox.applyFontToAllText(juce::Font(32.0f, juce::Font::bold));
     };
 
-    setSize (1100, 850);
+    setSize (1300, 850);
 }
 
 Neon37AudioProcessorEditor::~Neon37AudioProcessorEditor()
@@ -537,8 +579,10 @@ void Neon37AudioProcessorEditor::resized()
     auto osc2Area = oscArea;
     osc2Area.removeFromTop(8); // Space for separator
     auto oscRow2 = osc2Area.withSizeKeepingCentre(osc2Area.getWidth(), 90);
+    // Sneak Sync switch between Wave and Octave
     osc2Wave.setBounds(oscRow2.removeFromLeft(70));
-    osc2Octave.setBounds(oscRow2.removeFromLeft(70));
+    oscSyncBtn.setBounds(oscRow2.removeFromLeft(30).withSizeKeepingCentre(30, 20)); // Sneaky Sync
+    osc2Octave.setBounds(oscRow2.removeFromLeft(55)); // Reduced from 70
     osc2Semitones.setBounds(oscRow2.removeFromLeft(70));
     osc2Fine.setBounds(oscRow2.removeFromLeft(70));
 
@@ -561,12 +605,23 @@ void Neon37AudioProcessorEditor::resized()
     filterRes.setBounds(filterRow2.removeFromLeft(filterRow2.getWidth() / 2));
     filterDrive.setBounds(filterRow2);
     auto filterRow3 = filterArea.removeFromTop(90);
-    filterEgDepth.setBounds(filterRow3.removeFromLeft(filterRow3.getWidth() / 2));
-    filterKeyTrk.setBounds(filterRow3);
+    // filterEgDepth removed from here
+    filterKeyTrk.setBounds(filterRow3.removeFromLeft(filterRow3.getWidth() / 2));
+
+    // Pitch ENV Section
+    pitchEnvSection.setBounds(mainArea.removeFromLeft(110).reduced(4));
+    auto pitchEnvArea = pitchEnvSection.getLocalBounds().withTrimmedTop(40).reduced(15);
+    pitchTargetSelector.setBounds(pitchEnvArea.removeFromTop(50).reduced(5));
+    pitchDepth.setBounds(pitchEnvArea.removeFromTop(90));
+    pitchA.setBounds(pitchEnvArea.removeFromTop(90));
+    pitchD.setBounds(pitchEnvArea.removeFromTop(90));
+    pitchS.setBounds(pitchEnvArea.removeFromTop(90));
+    pitchR.setBounds(pitchEnvArea.removeFromTop(90));
 
     // ENV1 section
     env1Section.setBounds(mainArea.removeFromLeft(110).reduced(4));
     auto env1Area = env1Section.getLocalBounds().withTrimmedTop(40).reduced(15);
+    filterEgDepth.setBounds(env1Area.removeFromTop(90)); // Filter Env Depth moved here
     fltA.setBounds(env1Area.removeFromTop(90));
     fltD.setBounds(env1Area.removeFromTop(90));
     fltS.setBounds(env1Area.removeFromTop(90));

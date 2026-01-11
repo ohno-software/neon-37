@@ -212,13 +212,16 @@ private:
         LED leds[3];
         juce::Label labels[3];
         int selectedIndex = 1; // Default to 1+2
+        std::function<void(int)> onClick;
 
         RoutingSelector() {
             juce::String names[] = {"1", "1+2", "2"};
             for (int i = 0; i < 3; ++i) {
                 addAndMakeVisible(leds[i]);
+                leds[i].setInterceptsMouseClicks(false, false); // Pass clicks to parent
                 leds[i].color = juce::Colours::orangered; // Moog-style orange/red LEDs
                 addAndMakeVisible(labels[i]);
+                labels[i].setInterceptsMouseClicks(false, false); // Pass clicks to parent
                 labels[i].setText(names[i], juce::dontSendNotification);
                 labels[i].setFont(juce::Font(11.0f, juce::Font::bold));
                 labels[i].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.8f));
@@ -235,6 +238,7 @@ private:
             selectedIndex = (selectedIndex + 1) % 3;
             updateLeds();
             repaint();
+            if (onClick) onClick(selectedIndex);
         }
 
         void resized() override {
@@ -322,6 +326,7 @@ private:
 
     Knob osc1Wave{"WAVE", true}, osc1Octave{"OCTAVE"}, osc1Semitones{"SEMITONES"}, osc1Fine{"FINE"};
     Knob osc2Wave{"WAVE", true}, osc2Octave{"OCTAVE"}, osc2Semitones{"SEMITONES"}, osc2Fine{"FINE"};
+    SmallButton oscSyncBtn{"SYNC"}; // New Sync Button
 
     Section mixerSection{"MIXER"};
     Knob mixOsc1{"OSC 1"}, mixSub1{"SUB 1"}, mixOsc2{"OSC 2"}, mixNoise{"NOISE"};
@@ -334,6 +339,10 @@ private:
 
     Section env2Section{"AMP ENV"};
     Knob ampA{"A"}, ampD{"D"}, ampS{"S"}, ampR{"R"};
+
+    Section pitchEnvSection{"PITCH ENV"};
+    Knob pitchA{"A"}, pitchD{"D"}, pitchS{"S"}, pitchR{"R"}, pitchDepth{"DEPTH"};
+    RoutingSelector pitchTargetSelector;
 
     Section mod1Section{"LFO"};
     Section modBottomSection{"MODULATION"};
@@ -367,10 +376,37 @@ private:
     std::unique_ptr<SliderAttachment> masterVolAttach, masterFreqAttach, masterTuneAttach;
     std::unique_ptr<SliderAttachment> osc1WaveAttach, osc1OctaveAttach, osc1SemitonesAttach, osc1FineAttach;
     std::unique_ptr<SliderAttachment> osc2WaveAttach, osc2OctaveAttach, osc2SemitonesAttach, osc2FineAttach;
+    std::unique_ptr<ButtonAttachment> oscSyncAttach; // Attachment for Sync
     std::unique_ptr<SliderAttachment> mixOsc1Attach, mixSub1Attach, mixOsc2Attach, mixNoiseAttach;
     std::unique_ptr<SliderAttachment> cutoffAttach, resAttach, driveAttach, egDepthAttach, keyTrkAttach;
     std::unique_ptr<SliderAttachment> fltAAttach, fltDAttach, fltSAttach, fltRAttach;
     std::unique_ptr<SliderAttachment> ampAAttach, ampDAttach, ampSAttach, ampRAttach;
+    std::unique_ptr<SliderAttachment> pitchAAttach, pitchDAttach, pitchSAttach, pitchRAttach, pitchDepthAttach;
+    
+    // Custom attachment for RoutingSelector (Pitch Target)
+    struct PitchTargetAttachment : public juce::AudioProcessorValueTreeState::Listener
+    {
+        Neon37AudioProcessorEditor& editor;
+        PitchTargetAttachment(Neon37AudioProcessorEditor& e) : editor(e) {
+            editor.audioProcessor.apvts.addParameterListener("env_pitch_target", this);
+            parameterChanged("env_pitch_target", *editor.audioProcessor.apvts.getRawParameterValue("env_pitch_target"));
+        }
+        ~PitchTargetAttachment() {
+            editor.audioProcessor.apvts.removeParameterListener("env_pitch_target", this);
+        }
+        void parameterChanged(const juce::String& parameterID, float newValue) override {
+            if (parameterID == "env_pitch_target") {
+                int target = (int)newValue;
+                juce::MessageManager::callAsync([this, target] {
+                    editor.pitchTargetSelector.selectedIndex = target;
+                    editor.pitchTargetSelector.updateLeds();
+                    editor.pitchTargetSelector.repaint();
+                });
+            }
+        }
+    };
+    std::unique_ptr<PitchTargetAttachment> pitchTargetAttach;
+
     std::unique_ptr<SliderAttachment> glissTimeAttach;
     std::unique_ptr<ButtonAttachment> glissRteAttach, glissTmeAttach, glissLogAttach, glissOnGatLegAttach;
     std::unique_ptr<ButtonAttachment> envExpCurvAttach, holdAttach;
