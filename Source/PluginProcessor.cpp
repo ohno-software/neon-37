@@ -183,7 +183,18 @@ void Neon37AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
 
         // Voice output buffer
         voices[i].voiceBuffer.setSize(getTotalNumOutputChannels(), samplesPerBlock);
+        
+        // Initialize pitch glide (Hz; will be configured per note-on)
+        voices[i].pitchGlide.reset(sampleRate, 0.001);
+        voices[i].pitchGlide.setCurrentAndTargetValue(juce::MidiMessage::getMidiNoteInHertz(60));
     }
+    
+    // Initialize mono pitch glide (Hz)
+    monoPitchGlide.reset(sampleRate, 0.001);
+    monoPitchGlide.setCurrentAndTargetValue(juce::MidiMessage::getMidiNoteInHertz(60));
+
+    // Initialize global glide source
+    lastGlideFreqHz = juce::MidiMessage::getMidiNoteInHertz(60);
     
     // Initialize output gain to unity
     outputGain.prepare(spec);
@@ -298,14 +309,79 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (msg.isNoteOn())
         {
             int midiNote = msg.getNoteNumber();
+            const bool wasAnyKeyDown = (keysDownCount > 0);
+
+            // Track physically held keys (note-on)
+            if (midiNote >= 0 && midiNote < 128)
+            {
+                if (!keysDown[(size_t)midiNote])
+                {
+                    keysDown[(size_t)midiNote] = true;
+                    ++keysDownCount;
+                }
+            }
+
             // Track velocity (0-127 normalized to 0-1)
             currentVelocity = msg.getVelocity() / 127.0f;
             
+            // Handle LFO key reset
+            bool lfo1KeyReset = apvts.getRawParameterValue("lfo1_key_reset")->load() > 0.5f;
+            bool lfo2KeyReset = apvts.getRawParameterValue("lfo2_key_reset")->load() > 0.5f;
+            
+            if (lfo1KeyReset) lfo1.phase = 0.0f;
+            if (lfo2KeyReset) lfo2.phase = 0.0f;
+            
             if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L
             {
+                // Mono legato = at least one other note already held
+                const bool wasLegato = !noteStack.empty();
+                
+                // Get glide parameters
+                float glideTimeMs = apvts.getRawParameterValue("glide_time")->load();
+                bool glideRate = apvts.getRawParameterValue("glide_rate")->load() > 0.5f;
+                bool glideLegato = apvts.getRawParameterValue("glide_legato")->load() > 0.5f;
+                
+                // Apply glide if enabled and conditions are met
+                const bool shouldGlide = glideTimeMs > 0.0f && (!glideLegato || wasLegato);
+
+                // Maintain a unique, most-recent-first note stack
+                if (auto it = std::find(noteStack.begin(), noteStack.end(), midiNote); it != noteStack.end())
+                    noteStack.erase(it);
+                noteStack.push_back(midiNote);
+
                 currentMidiNote = midiNote;
-                heldNoteCount++;
-                noteStack.push_back(midiNote);  // Add to note stack
+                
+                const float targetFreqHz = juce::MidiMessage::getMidiNoteInHertz(midiNote);
+
+                // Configure portamento (smooth frequency in Hz)
+                if (shouldGlide)
+                {
+                    const float currentFreqHz = monoPitchGlide.getCurrentValue();
+
+                    if (glideRate)
+                    {
+                        // Rate mode: constant semitones/sec implemented via time proportional to interval.
+                        // Interpret glideTimeMs as "time for 1 octave".
+                        const float ratio = targetFreqHz / juce::jmax(1.0e-6f, currentFreqHz);
+                        const float octaves = std::abs(std::log2(juce::jmax(1.0e-6f, ratio)));
+                        float timeSeconds = (glideTimeMs / 1000.0f) * octaves;
+                        timeSeconds = juce::jlimit(0.001f, 5.0f, timeSeconds);
+                        monoPitchGlide.reset(currentSampleRate, timeSeconds);
+                    }
+                    else
+                    {
+                        // Time mode: constant time regardless of interval
+                        monoPitchGlide.reset(currentSampleRate, glideTimeMs / 1000.0f);
+                    }
+                    monoPitchGlide.setTargetValue(targetFreqHz);
+                }
+                else
+                {
+                    // No glide: instant jump
+                    monoPitchGlide.setCurrentAndTargetValue(targetFreqHz);
+                }
+
+                lastGlideFreqHz = targetFreqHz;
                 
                 // Envelope retrigger logic:
                 // Mono (mode 1): Always retrigger
@@ -315,7 +391,7 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 {
                     shouldRetrigger = true;
                 }
-                else if (voiceMode == 0 && heldNoteCount == 1) // Mono-L, first note pressed
+                else if (voiceMode == 0 && !wasLegato) // Mono-L, first note pressed
                 {
                     shouldRetrigger = true;
                 }
@@ -353,6 +429,13 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             }
             else if (voiceMode == 2 || voiceMode == 3)  // Paraphonic modes (Para-L, Para)
             {
+                const bool isLegato = wasAnyKeyDown;
+
+                float glideTimeMs = apvts.getRawParameterValue("glide_time")->load();
+                bool glideRate = apvts.getRawParameterValue("glide_rate")->load() > 0.5f;
+                bool glideLegato = apvts.getRawParameterValue("glide_legato")->load() > 0.5f;
+                const bool shouldGlide = glideTimeMs > 0.0f && (!glideLegato || isLegato);
+
                 // Allocate voice (refactored into helper)
                 int voiceToAllocate = allocateVoice();
                 
@@ -361,6 +444,33 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 voices[voiceToAllocate].active = true;
                 voices[voiceToAllocate].allocationTimestamp = ++voiceAllocationCounter;
                 voices[voiceToAllocate].ampGate.noteOn();
+
+                const float targetFreqHz = juce::MidiMessage::getMidiNoteInHertz(midiNote);
+                const float sourceFreqHz = shouldGlide ? lastGlideFreqHz : targetFreqHz;
+
+                voices[voiceToAllocate].pitchGlide.setCurrentAndTargetValue(sourceFreqHz);
+                if (shouldGlide)
+                {
+                    if (glideRate)
+                    {
+                        const float ratio = targetFreqHz / juce::jmax(1.0e-6f, sourceFreqHz);
+                        const float octaves = std::abs(std::log2(juce::jmax(1.0e-6f, ratio)));
+                        float timeSeconds = (glideTimeMs / 1000.0f) * octaves;
+                        timeSeconds = juce::jlimit(0.001f, 5.0f, timeSeconds);
+                        voices[voiceToAllocate].pitchGlide.reset(currentSampleRate, timeSeconds);
+                    }
+                    else
+                    {
+                        voices[voiceToAllocate].pitchGlide.reset(currentSampleRate, glideTimeMs / 1000.0f);
+                    }
+                    voices[voiceToAllocate].pitchGlide.setTargetValue(targetFreqHz);
+                }
+                else
+                {
+                    voices[voiceToAllocate].pitchGlide.setCurrentAndTargetValue(targetFreqHz);
+                }
+
+                lastGlideFreqHz = targetFreqHz;
                 
                 // Envelope retrigger logic for paraphonic modes:
                 // Para-L (mode 2): Only retrigger if this is the first note after all notes were released
@@ -421,6 +531,13 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                     }
                 }
                 
+                const bool isLegato = wasAnyKeyDown;
+
+                float glideTimeMs = apvts.getRawParameterValue("glide_time")->load();
+                bool glideRate = apvts.getRawParameterValue("glide_rate")->load() > 0.5f;
+                bool glideLegato = apvts.getRawParameterValue("glide_legato")->load() > 0.5f;
+                const bool shouldGlide = glideTimeMs > 0.0f && (!glideLegato || isLegato);
+
                 // Allocate voice for the new trigger
                 int voiceToAllocate = allocateVoice();
                 
@@ -430,6 +547,33 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 voices[voiceToAllocate].allocationTimestamp = ++voiceAllocationCounter;
                 voices[voiceToAllocate].velocity = currentVelocity;  // Store this note's velocity
                 voices[voiceToAllocate].aftertouch = 0.0f;  // Initialize aftertouch to 0
+
+                const float targetFreqHz = juce::MidiMessage::getMidiNoteInHertz(midiNote);
+                const float sourceFreqHz = shouldGlide ? lastGlideFreqHz : targetFreqHz;
+
+                voices[voiceToAllocate].pitchGlide.setCurrentAndTargetValue(sourceFreqHz);
+                if (shouldGlide)
+                {
+                    if (glideRate)
+                    {
+                        const float ratio = targetFreqHz / juce::jmax(1.0e-6f, sourceFreqHz);
+                        const float octaves = std::abs(std::log2(juce::jmax(1.0e-6f, ratio)));
+                        float timeSeconds = (glideTimeMs / 1000.0f) * octaves;
+                        timeSeconds = juce::jlimit(0.001f, 5.0f, timeSeconds);
+                        voices[voiceToAllocate].pitchGlide.reset(currentSampleRate, timeSeconds);
+                    }
+                    else
+                    {
+                        voices[voiceToAllocate].pitchGlide.reset(currentSampleRate, glideTimeMs / 1000.0f);
+                    }
+                    voices[voiceToAllocate].pitchGlide.setTargetValue(targetFreqHz);
+                }
+                else
+                {
+                    voices[voiceToAllocate].pitchGlide.setCurrentAndTargetValue(targetFreqHz);
+                }
+
+                lastGlideFreqHz = targetFreqHz;
                 
                 // Trigger per-voice envelopes (always retrigger in poly mode, like MONO)
                 voices[voiceToAllocate].filterEnv.noteOn();
@@ -441,22 +585,61 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         else if (msg.isNoteOff())
         {
             int midiNote = msg.getNoteNumber();
+
+            // Track physically held keys (note-off)
+            if (midiNote >= 0 && midiNote < 128)
+            {
+                if (keysDown[(size_t)midiNote])
+                {
+                    keysDown[(size_t)midiNote] = false;
+                    keysDownCount = juce::jmax(0, keysDownCount - 1);
+                }
+            }
             
             if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L
             {
-                heldNoteCount--;
-                
-                // Remove from note stack
-                auto it = std::find(noteStack.begin(), noteStack.end(), midiNote);
-                if (it != noteStack.end())
-                {
-                    noteStack.erase(it);
-                }
-                
+                // Remove from note stack (unique list; remove any occurrences defensively)
+                noteStack.erase(std::remove(noteStack.begin(), noteStack.end(), midiNote), noteStack.end());
+
                 // If there are still held notes, switch to the most recent one
-                if (heldNoteCount > 0 && !noteStack.empty())
+                if (!noteStack.empty())
                 {
-                    currentMidiNote = noteStack.back();  // Switch to most recent held note
+                    const int nextNote = noteStack.back();
+                    currentMidiNote = nextNote;
+
+                    const float targetFreqHz = juce::MidiMessage::getMidiNoteInHertz(nextNote);
+
+                    // Configure glide for the note switch (release-to-held-note counts as legato)
+                    float glideTimeMs = apvts.getRawParameterValue("glide_time")->load();
+                    bool glideRate = apvts.getRawParameterValue("glide_rate")->load() > 0.5f;
+                    bool glideLegato = apvts.getRawParameterValue("glide_legato")->load() > 0.5f;
+                    const bool isLegato = true;
+                    const bool shouldGlide = glideTimeMs > 0.0f && (!glideLegato || isLegato);
+
+                    if (shouldGlide)
+                    {
+                        const float currentFreqHz = monoPitchGlide.getCurrentValue();
+                        if (glideRate)
+                        {
+                            const float ratio = targetFreqHz / juce::jmax(1.0e-6f, currentFreqHz);
+                            const float octaves = std::abs(std::log2(juce::jmax(1.0e-6f, ratio)));
+                            float timeSeconds = (glideTimeMs / 1000.0f) * octaves;
+                            timeSeconds = juce::jlimit(0.001f, 5.0f, timeSeconds);
+                            monoPitchGlide.reset(currentSampleRate, timeSeconds);
+                        }
+                        else
+                        {
+                            monoPitchGlide.reset(currentSampleRate, glideTimeMs / 1000.0f);
+                        }
+                        monoPitchGlide.setTargetValue(targetFreqHz);
+                    }
+                    else
+                    {
+                        monoPitchGlide.setCurrentAndTargetValue(targetFreqHz);
+                    }
+
+                    lastGlideFreqHz = targetFreqHz;
+
                     // For Mono mode, retrigger the envelope on note switch
                     if (voiceMode == 1)
                     {
@@ -468,8 +651,6 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 else
                 {
                     // All keys released
-                    heldNoteCount = 0;
-                    noteStack.clear();
                     monoFilterEnv.noteOff();
                     monoAmpEnv.noteOff();
                     monoPitchEnv.noteOff();
@@ -706,25 +887,25 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     
     // Generate and mix oscillators
     float twoPiOverSr = juce::MathConstants<float>::twoPi / (float)currentSampleRate;
+
+    // Precompute constant ratios for this block
+    const float totalPitchModRatio = std::pow(2.0f, totalPitchModSemitones / 12.0f);
+    const float osc1Ratio = std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
+    const float osc2Ratio = std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
     
     if (voiceMode == 0 || voiceMode == 1)  // MONO or MONO-L rendering
     {
-        // Calculate base frequency from current MIDI note
-        float baseFreq = 440.0f * std::pow(2.0f, (currentMidiNote - 69) / 12.0f);
-        
-        // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
-        float lfoModFreq = baseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
-        
-        // Osc1 frequency (with LFO modulation)
-        float osc1Freq = lfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
-        
-        // Osc2 frequency (with LFO modulation)
-        float osc2Freq = lfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
-        
-        // Sub oscillator is one octave below osc1
-        
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
+            // Sample-accurate portamento: advance SmoothedValue every sample
+            const float baseFreq = monoPitchGlide.getNextValue();
+
+            // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
+            const float lfoModFreq = baseFreq * totalPitchModRatio;
+
+            const float osc1FreqBase = lfoModFreq * osc1Ratio;
+            const float osc2FreqBase = lfoModFreq * osc2Ratio;
+
             // Get envelope values
             float filterEnvValue = monoFilterEnv.getNextSample();
             float ampEnvValue = monoAmpEnv.getNextSample();
@@ -738,8 +919,8 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
 
             // Calculate current sample frequency with Pitch EG
-            float currentOsc1Freq = osc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
-            float currentOsc2Freq = osc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+            float currentOsc1Freq = osc1FreqBase * std::pow(2.0f, osc1PitchMod / 12.0f);
+            float currentOsc2Freq = osc2FreqBase * std::pow(2.0f, osc2PitchMod / 12.0f);
             float currentSubFreq = currentOsc1Freq * 0.5f;
 
             // Calculate and apply modulated cutoff
@@ -823,20 +1004,17 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             if (!voices[voiceIdx].active)
                 continue;
             
-            // Calculate frequencies for this voice (with all pitch modulations)
-            float voiceBaseFreq = 440.0f * std::pow(2.0f, (voices[voiceIdx].midiNote - 69) / 12.0f);
-            
-            // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
-            float voiceLfoModFreq = voiceBaseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
-            
-            float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
-            float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
-            
             // Render voice's oscillators to voiceBuffer
             voices[voiceIdx].voiceBuffer.clear();
             
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
+                // Sample-accurate pitch for this voice
+                const float voiceBaseFreq = voices[voiceIdx].pitchGlide.getNextValue();
+                const float voiceLfoModFreq = voiceBaseFreq * totalPitchModRatio;
+                const float voiceOsc1FreqBase = voiceLfoModFreq * osc1Ratio;
+                const float voiceOsc2FreqBase = voiceLfoModFreq * osc2Ratio;
+
                 // Calculate Pitch EG modification
                 float pitchEnvValue = pitchEnvBuffer.getSample(0, sample);
                 float pitchEgMod = pitchEnvValue * pitchEgDepth; // Semitones
@@ -844,8 +1022,8 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
 
                 // Calculate current sample frequency with Pitch EG
-                float currentVoiceOsc1Freq = voiceOsc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
-                float currentVoiceOsc2Freq = voiceOsc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+                float currentVoiceOsc1Freq = voiceOsc1FreqBase * std::pow(2.0f, osc1PitchMod / 12.0f);
+                float currentVoiceOsc2Freq = voiceOsc2FreqBase * std::pow(2.0f, osc2PitchMod / 12.0f);
                 float currentVoiceSubFreq = currentVoiceOsc1Freq * 0.5f;
 
                 // Generate oscillator samples for this voice
@@ -957,20 +1135,20 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             if (!voices[voiceIdx].active)
                 continue;
             
-            // Calculate frequencies for this voice (with LFO pitch modulation)
-            float voiceBaseFreq = 440.0f * std::pow(2.0f, (voices[voiceIdx].midiNote - 69) / 12.0f);
-            
-            // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
-            float voiceLfoModFreq = voiceBaseFreq * std::pow(2.0f, totalPitchModSemitones / 12.0f);
-            
-            float voiceOsc1Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc1Octave) * std::pow(2.0f, (float)osc1Semitones / 12.0f) * std::pow(2.0f, osc1Fine / 12.0f);
-            float voiceOsc2Freq = voiceLfoModFreq * std::pow(2.0f, (float)osc2Octave) * std::pow(2.0f, (float)osc2Semitones / 12.0f) * std::pow(2.0f, osc2Fine / 12.0f);
-            
             // Render voice's oscillators
             voices[voiceIdx].voiceBuffer.clear();
             
             for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
             {
+                // Sample-accurate pitch for this voice
+                const float voiceBaseFreq = voices[voiceIdx].pitchGlide.getNextValue();
+
+                // Apply all pitch modulations (LFO, velocity, aftertouch, pitch bend)
+                const float voiceLfoModFreq = voiceBaseFreq * totalPitchModRatio;
+
+                const float voiceOsc1FreqBase = voiceLfoModFreq * osc1Ratio;
+                const float voiceOsc2FreqBase = voiceLfoModFreq * osc2Ratio;
+
                 // Pitch Envelope
                 float pitchEnvValue = voices[voiceIdx].pitchEnv.getNextSample();
                 float pitchEgMod = pitchEnvValue * pitchEgDepth; // Semitones
@@ -978,8 +1156,8 @@ void Neon37AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 float osc2PitchMod = (pitchEgTarget == 2 || pitchEgTarget == 1) ? pitchEgMod : 0.0f;
 
                 // Calculate current sample frequency with Pitch EG
-                float currentVoiceOsc1Freq = voiceOsc1Freq * std::pow(2.0f, osc1PitchMod / 12.0f);
-                float currentVoiceOsc2Freq = voiceOsc2Freq * std::pow(2.0f, osc2PitchMod / 12.0f);
+                float currentVoiceOsc1Freq = voiceOsc1FreqBase * std::pow(2.0f, osc1PitchMod / 12.0f);
+                float currentVoiceOsc2Freq = voiceOsc2FreqBase * std::pow(2.0f, osc2PitchMod / 12.0f);
                 float currentVoiceSubFreq = currentVoiceOsc1Freq * 0.5f;
 
                 // Generate oscillator samples for this voice
@@ -1355,17 +1533,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("voice_mode", "Voice Mode", juce::StringArray { "Mono-L", "Mono", "Para-L", "Para", "Poly" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("hold_mode", "Hold Mode", false));
     
-    // Glide/Gliss - defaults to OFF (time = 0)
-    params.push_back (std::make_unique<juce::AudioParameterFloat> ("gliss_time", "Gliss Time", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f, 0.3f), 0.0f)); // Default 0 = OFF
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("gliss_rte", "Gliss RTE", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("gliss_tme", "Gliss TME", true)); // Default mode
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("gliss_log", "Gliss LOG", false));
-    params.push_back (std::make_unique<juce::AudioParameterBool> ("gliss_on_gat_leg", "Gliss On Gat Leg", false));
+    // Glide/Portamento - defaults to OFF (time = 0)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("glide_time", "Glide", juce::NormalisableRange<float> (0.0f, 1000.0f, 1.0f, 4.0f), 0.0f)); // 0-1000ms, exponential with low-end granularity
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("glide_rate", "Glide Rate", true)); // Default: Rate mode ON
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("glide_legato", "Glide Legato", false));
 
     // LFO 1
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_rate", "LFO 1 Rate", juce::NormalisableRange<float> (0.01f, 100.0f, 0.01f, 0.3f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo1_sync", "LFO 1 Sync", false));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_sync_val", "LFO 1 Sync Val", juce::StringArray { "1/64", "1/32", "1/16", "1/8", "1/4", "1/2", "1/1", "2/1", "3/1", "4/1", "8/1" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo1_key_reset", "LFO 1 Key Reset", false));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo1_wave", "LFO 1 Wave", juce::StringArray { "Triangle", "Ramp Up", "Ramp Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_pitch", "LFO 1 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo1_filter", "LFO 1 Filter", 0.0f, 1.0f, 0.0f));
@@ -1375,6 +1552,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Neon37AudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_rate", "LFO 2 Rate", juce::NormalisableRange<float> (0.01f, 100.0f, 0.01f, 0.3f), 0.1f));
     params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo2_sync", "LFO 2 Sync", false));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_sync_val", "LFO 2 Sync Val", juce::StringArray { "1/64", "1/32", "1/16", "1/8", "1/4", "1/2", "1/1", "2/1", "3/1", "4/1", "8/1" }, 0));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("lfo2_key_reset", "LFO 2 Key Reset", false));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("lfo2_wave", "LFO 2 Wave", juce::StringArray { "Triangle", "Ramp Up", "Ramp Down", "Square", "S&H" }, 0));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_pitch", "LFO 2 Pitch", 0.0f, 1.0f, 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("lfo2_filter", "LFO 2 Filter", 0.0f, 1.0f, 0.0f));

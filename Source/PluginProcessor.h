@@ -44,6 +44,9 @@ struct Neon37Voice
     juce::ADSR ampEnv;
     juce::ADSR pitchEnv; // Per-voice pitch envelope
     
+    // Portamento/glide for smooth pitch transitions
+    juce::SmoothedValue<float> pitchGlide;
+    
     // Buffer for rendering this voice's signal (before shared processing in para modes)
     juce::AudioBuffer<float> voiceBuffer;
 };
@@ -111,13 +114,23 @@ private:
 
     double currentSampleRate = 44100.0;
     
+    // Portamento/glide for smooth pitch transitions (Hz)
+    juce::SmoothedValue<float> monoPitchGlide;
+
+    // Last played frequency used as deterministic glide source for Para/Poly (Hz)
+    float lastGlideFreqHz = 440.0f;
+    
     // Oscillator phase tracking - for MONO modes
     float osc1Phase = 0.0f, osc2Phase = 0.0f, subOscPhase = 0.0f;
     
     // MIDI note tracking - for MONO modes
     int currentMidiNote = 60; // Middle C
-    int heldNoteCount = 0;    // Track how many keys are currently held
-    std::vector<int> noteStack;  // Stack of held notes (for proper mono note recall)
+    // Stack of held notes (unique, ordered by most-recent press) for proper mono note recall
+    std::vector<int> noteStack;
+
+    // Tracks physically held keys (independent of envelope release tails)
+    std::array<bool, 128> keysDown{};
+    int keysDownCount = 0;
     
     // Paraphonic voices (8 voices max)
     static constexpr int MAX_VOICES = 8;

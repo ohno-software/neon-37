@@ -58,9 +58,11 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     mod1Section.addAndMakeVisible(lfo1Rate);
     mod1Section.addAndMakeVisible(lfo1Wave);
     mod1Section.addAndMakeVisible(lfo1SyncBtn);
+    mod1Section.addAndMakeVisible(lfo1ResetBtn);
     mod1Section.addAndMakeVisible(lfo2Rate);
     mod1Section.addAndMakeVisible(lfo2Wave);
     mod1Section.addAndMakeVisible(lfo2SyncBtn);
+    mod1Section.addAndMakeVisible(lfo2ResetBtn);
 
 
     addAndMakeVisible(modBottomSection);
@@ -96,13 +98,11 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     modBottomSection.addAndMakeVisible(pbAmp);
     
     masterSection.addAndMakeVisible(masterVolume);
-    masterSection.addAndMakeVisible(masterFreq);
     masterSection.addAndMakeVisible(masterTune);
-    masterSection.addAndMakeVisible(glissTime);
-    masterSection.addAndMakeVisible(glissRteBtn);
-    masterSection.addAndMakeVisible(glissTmeBtn);
-    masterSection.addAndMakeVisible(glissLogBtn);
-    masterSection.addAndMakeVisible(glissOnGatLegBtn);
+    masterSection.addAndMakeVisible(glide);
+    masterSection.addAndMakeVisible(glideRateBtn);
+    masterSection.addAndMakeVisible(glideTimeBtn);
+    masterSection.addAndMakeVisible(glideLegatoBtn);
     masterSection.addAndMakeVisible(holdBtn);
     
     masterSection.addAndMakeVisible(modeLabel);
@@ -126,8 +126,6 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
 
     masterVolAttach = std::make_unique<SliderAttachment>(apvts, "master_volume", masterVolume.slider);
     setupKnob(masterVolume, "master_volume");
-    masterFreqAttach = std::make_unique<SliderAttachment>(apvts, "master_freq", masterFreq.slider);
-    setupKnob(masterFreq, "master_freq");
     masterTuneAttach = std::make_unique<SliderAttachment>(apvts, "master_tune", masterTune.slider);
     setupKnob(masterTune, "master_tune");
 
@@ -218,12 +216,26 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     ampRAttach = std::make_unique<SliderAttachment>(apvts, "env2_release", ampR.slider);
     setupKnob(ampR, "env2_release");
     
-    glissTimeAttach = std::make_unique<SliderAttachment>(apvts, "gliss_time", glissTime.slider);
-    setupKnob(glissTime, "gliss_time");
-    glissRteAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_rte", glissRteBtn);
-    glissTmeAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_tme", glissTmeBtn);
-    glissLogAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_log", glissLogBtn);
-    glissOnGatLegAttach = std::make_unique<ButtonAttachment>(apvts, "gliss_on_gat_leg", glissOnGatLegBtn);
+    glideAttach = std::make_unique<SliderAttachment>(apvts, "glide_time", glide.slider);
+    setupKnob(glide, "glide_time");
+    glideRateAttach = std::make_unique<ButtonAttachment>(apvts, "glide_rate", glideRateBtn);
+    glideLegatoAttach = std::make_unique<ButtonAttachment>(apvts, "glide_legato", glideLegatoBtn);
+    
+    // Rate and Time are mutually exclusive using JUCE radio group
+    glideRateBtn.setRadioGroupId(1001);
+    glideTimeBtn.setRadioGroupId(1001);
+    glideTimeBtn.setClickingTogglesState(true);
+    
+    // Initialize Time button as inverse of Rate
+    glideTimeBtn.setToggleState(!glideRateBtn.getToggleState(), juce::dontSendNotification);
+    
+    // Sync Time button state with Rate parameter changes
+    glideTimeBtn.onClick = [this]() {
+        auto* param = audioProcessor.apvts.getParameter("glide_rate");
+        if (param && glideTimeBtn.getToggleState()) {
+            param->setValueNotifyingHost(0.0f); // Turn off Rate when Time is on
+        }
+    };
 
     holdAttach = std::make_unique<ButtonAttachment>(apvts, "hold_mode", holdBtn);
 
@@ -269,6 +281,7 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     lfo1WaveAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_wave", lfo1Wave.slider);
     setupKnob(lfo1Wave, "lfo1_wave");
     lfo1SyncAttach = std::make_unique<ButtonAttachment>(apvts, "lfo1_sync", lfo1SyncBtn);
+    lfo1ResetAttach = std::make_unique<ButtonAttachment>(apvts, "lfo1_key_reset", lfo1ResetBtn);
 
     // LFO 2 Attachments
     lfo2RateAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_rate", lfo2Rate.slider);
@@ -276,6 +289,7 @@ Neon37AudioProcessorEditor::Neon37AudioProcessorEditor (Neon37AudioProcessor& p)
     lfo2WaveAttach = std::make_unique<SliderAttachment>(apvts, "lfo2_wave", lfo2Wave.slider);
     setupKnob(lfo2Wave, "lfo2_wave");
     lfo2SyncAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_sync", lfo2SyncBtn);
+    lfo2ResetAttach = std::make_unique<ButtonAttachment>(apvts, "lfo2_key_reset", lfo2ResetBtn);
 
     lfo1PitchAttach = std::make_unique<SliderAttachment>(apvts, "lfo1_pitch", lfo1Pitch.slider);
     setupKnob(lfo1Pitch, "lfo1_pitch");
@@ -511,19 +525,17 @@ void Neon37AudioProcessorEditor::resized()
     
     auto sideContent = masterSection.getLocalBounds().withTrimmedTop(40).reduced(15);
     masterVolume.setBounds(sideContent.removeFromTop(90));
-    masterFreq.setBounds(sideContent.removeFromTop(90));
     
     auto tuneArea = sideContent.removeFromTop(90);
     masterTune.setBounds(tuneArea);
     
-    // Gliss controls in master section
-    auto glissArea = sideContent.removeFromTop(100);
-    glissTime.setBounds(glissArea.removeFromTop(80));
-    auto glissBtns = glissArea;
-    glissRteBtn.setBounds(glissBtns.removeFromLeft(glissBtns.getWidth() / 4).reduced(2));
-    glissTmeBtn.setBounds(glissBtns.removeFromLeft(glissBtns.getWidth() / 3).reduced(2));
-    glissLogBtn.setBounds(glissBtns.removeFromLeft(glissBtns.getWidth() / 2).reduced(2));
-    glissOnGatLegBtn.setBounds(glissBtns.reduced(2));
+    // Glide controls in master section - need more space for 3 stacked buttons
+    auto glideArea = sideContent.removeFromTop(170);  // Increased from 100 to 170
+    glide.setBounds(glideArea.removeFromTop(80));
+    glideArea.removeFromTop(10);  // Small spacing
+    glideRateBtn.setBounds(glideArea.removeFromTop(24).reduced(5, 2));
+    glideTimeBtn.setBounds(glideArea.removeFromTop(24).reduced(5, 2));
+    glideLegatoBtn.setBounds(glideArea.removeFromTop(24).reduced(5, 2));
     
     auto sideBtns = sideContent.removeFromTop(170);
     holdBtn.setBounds(sideBtns.removeFromTop(24).reduced(5, 2));
@@ -555,12 +567,18 @@ void Neon37AudioProcessorEditor::resized()
     
     auto lfo1Row = lfoArea.removeFromTop(lfoRowH);
     lfo1Rate.setBounds(lfo1Row.removeFromLeft(70));
-    lfo1SyncBtn.setBounds(lfo1Row.removeFromLeft(50).withSizeKeepingCentre(40, 20));
+    auto lfo1BtnArea = lfo1Row.removeFromLeft(50).withSizeKeepingCentre(50, 45);  // Center 45px block (20+5+20)
+    lfo1SyncBtn.setBounds(lfo1BtnArea.removeFromTop(20).withSizeKeepingCentre(40, 20));
+    lfo1BtnArea.removeFromTop(5);  // 5px gap
+    lfo1ResetBtn.setBounds(lfo1BtnArea.removeFromTop(20).withSizeKeepingCentre(40, 20));
     lfo1Wave.setBounds(lfo1Row.removeFromLeft(70));
     
     auto lfo2Row = lfoArea;
     lfo2Rate.setBounds(lfo2Row.removeFromLeft(70));
-    lfo2SyncBtn.setBounds(lfo2Row.removeFromLeft(50).withSizeKeepingCentre(40, 20));
+    auto lfo2BtnArea = lfo2Row.removeFromLeft(50).withSizeKeepingCentre(50, 45);  // Center 45px block (20+5+20)
+    lfo2SyncBtn.setBounds(lfo2BtnArea.removeFromTop(20).withSizeKeepingCentre(40, 20));
+    lfo2BtnArea.removeFromTop(5);  // 5px gap
+    lfo2ResetBtn.setBounds(lfo2BtnArea.removeFromTop(20).withSizeKeepingCentre(40, 20));
     lfo2Wave.setBounds(lfo2Row.removeFromLeft(70));
     
     // Layout knobs within sections - split oscillator section in half

@@ -284,8 +284,8 @@ private:
     
     // Envelope Buttons
 
-    // Gliss Buttons
-    SmallButton glissRteBtn{"RT"}, glissTmeBtn{"TM"}, glissLogBtn{"LG"}, glissOnGatLegBtn{"ON GAT LEG"};
+    // Glide Buttons
+    SmallButton glideRateBtn{"RATE"}, glideTimeBtn{"TIME"}, glideLegatoBtn{"LEGATO"};
 
     struct LockIcon : public juce::Component {
         void paint(juce::Graphics& g) override {
@@ -349,11 +349,11 @@ private:
 
     Knob lfo1Rate{"RATE"}, lfo1Wave{"WAVE", true};
     Knob lfo1Pitch{"PITCH"}, lfo1Filter{"FILTER"}, lfo1Amp{"AMP"};
-    SmallButton lfo1SyncBtn{"SYNC"};
+    SmallButton lfo1SyncBtn{"SYNC"}, lfo1ResetBtn{"RESET"};
 
     Knob lfo2Rate{"RATE"}, lfo2Wave{"WAVE", true};
     Knob lfo2Pitch{"PITCH"}, lfo2Filter{"FILTER"}, lfo2Amp{"AMP"};
-    SmallButton lfo2SyncBtn{"SYNC"};
+    SmallButton lfo2SyncBtn{"SYNC"}, lfo2ResetBtn{"RESET"};
 
     Knob velPitch{"PITCH"}, velFilter{"FILTER"}, velAmp{"AMP"};
     Knob atPitch{"PITCH"}, atFilter{"FILTER"}, atAmp{"AMP"};
@@ -366,14 +366,14 @@ private:
     
     Section masterSection{"MASTER"};
     juce::Label modeLabel{};  // For voice mode buttons
-    Knob glissTime{"GLIDE TIME"};
-    Knob masterVolume{"VOLUME"}, masterFreq{"MASTER FREQ"}, masterTune{"MASTER TUNE"};
+    Knob glide{"GLIDE"};
+    Knob masterVolume{"VOLUME"}, masterTune{"MASTER TUNE"};
 
     // APVTS Attachments
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<SliderAttachment> masterVolAttach, masterFreqAttach, masterTuneAttach;
+    std::unique_ptr<SliderAttachment> masterVolAttach, masterTuneAttach;
     std::unique_ptr<SliderAttachment> osc1WaveAttach, osc1OctaveAttach, osc1SemitonesAttach, osc1FineAttach;
     std::unique_ptr<SliderAttachment> osc2WaveAttach, osc2OctaveAttach, osc2SemitonesAttach, osc2FineAttach;
     std::unique_ptr<ButtonAttachment> oscSyncAttach; // Attachment for Sync
@@ -407,8 +407,8 @@ private:
     };
     std::unique_ptr<PitchTargetAttachment> pitchTargetAttach;
 
-    std::unique_ptr<SliderAttachment> glissTimeAttach;
-    std::unique_ptr<ButtonAttachment> glissRteAttach, glissTmeAttach, glissLogAttach, glissOnGatLegAttach;
+    std::unique_ptr<SliderAttachment> glideAttach;
+    std::unique_ptr<ButtonAttachment> glideRateAttach, glideLegatoAttach;
     std::unique_ptr<ButtonAttachment> envExpCurvAttach, holdAttach;
     
     struct VoiceModeAttachment : public juce::AudioProcessorValueTreeState::Listener
@@ -437,9 +437,9 @@ private:
     std::unique_ptr<VoiceModeAttachment> voiceModeAttach;
 
     std::unique_ptr<SliderAttachment> lfo1RateAttach, lfo1WaveAttach, lfo1PitchAttach, lfo1FilterAttach, lfo1AmpAttach;
-    std::unique_ptr<ButtonAttachment> lfo1SyncAttach;
+    std::unique_ptr<ButtonAttachment> lfo1SyncAttach, lfo1ResetAttach;
     std::unique_ptr<SliderAttachment> lfo2RateAttach, lfo2WaveAttach, lfo2PitchAttach, lfo2FilterAttach, lfo2AmpAttach;
-    std::unique_ptr<ButtonAttachment> lfo2SyncAttach;
+    std::unique_ptr<ButtonAttachment> lfo2SyncAttach, lfo2ResetAttach;
 
     std::unique_ptr<SliderAttachment> velPitchAttach, velFilterAttach, velAmpAttach;
     std::unique_ptr<SliderAttachment> atPitchAttach, atFilterAttach, atAmpAttach;
